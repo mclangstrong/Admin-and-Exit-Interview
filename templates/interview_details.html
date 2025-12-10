@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview Analysis - InterviewAI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .details-container {
+            min-height: 100vh;
+            background: var(--bg-primary);
+        }
+
+        .details-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-md);
+            transition: all var(--transition-fast);
+        }
+
+        .back-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .details-main {
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .interview-header-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .interview-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .meta-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .meta-value {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .analysis-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            text-align: center;
+        }
+
+        .analysis-icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .analysis-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .analysis-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .sentiment-positive {
+            color: var(--success);
+        }
+
+        .sentiment-neutral {
+            color: var(--warning);
+        }
+
+        .sentiment-negative {
+            color: var(--danger);
+        }
+
+        .transcript-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .transcript-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .transcript-item {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .transcript-item:last-child {
+            border-bottom: none;
+        }
+
+        .transcript-speaker {
+            font-size: 0.75rem;
+            color: var(--accent-primary);
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .transcript-text {
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        .transcript-analysis {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+        }
+
+        .analysis-tag {
+            padding: 0.125rem 0.5rem;
+            border-radius: 100px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+        }
+
+        .charts-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+        }
+
+        .chart-container {
+            height: 250px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        @media (max-width: 768px) {
+            .analysis-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .charts-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="details-container">
+        <header class="details-header">
+            <a href="/dashboard" class="back-btn">
+                ← Back to Dashboard
+            </a>
+            <div class="logo-badge">
+                <span class="logo-icon">🎓</span>
+                <span class="logo-text">InterviewAI</span>
+            </div>
+        </header>
+
+        <main class="details-main">
+            <!-- Interview Header -->
+            <div class="interview-header-card">
+                <h1 id="interview-title">Interview Analysis</h1>
+                <div class="interview-meta">
+                    <div class="meta-item">
+                        <span class="meta-label">Student</span>
+                        <span class="meta-value" id="student-name">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Program</span>
+                        <span class="meta-value" id="program">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Interview Type</span>
+                        <span class="meta-value" id="interview-type">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Date</span>
+                        <span class="meta-value" id="interview-date">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Status</span>
+                        <span class="meta-value" id="status">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analysis Summary -->
+            <div class="analysis-grid">
+                <div class="analysis-card">
+                    <div class="analysis-icon">💬</div>
+                    <div class="analysis-value" id="dominant-sentiment">--</div>
+                    <div class="analysis-label">Dominant Sentiment</div>
+                </div>
+                <div class="analysis-card">
+                    <div class="analysis-icon">😊</div>
+                    <div class="analysis-value" id="dominant-emotion">--</div>
+                    <div class="analysis-label">Dominant Emotion</div>
+                </div>
+                <div class="analysis-card">
+                    <div class="analysis-icon">📈</div>
+                    <div class="analysis-value" id="engagement-score">--</div>
+                    <div class="analysis-label">Engagement Score</div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div class="charts-row">
+                <div class="chart-card">
+                    <h3 class="section-title">📊 Sentiment Distribution</h3>
+                    <div class="chart-container">
+                        <canvas id="sentimentChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3 class="section-title">😊 Emotion Breakdown</h3>
+                    <div class="chart-container">
+                        <canvas id="emotionChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcript with Analysis -->
+            <div class="transcript-section">
+                <h3 class="section-title">📝 Full Transcript with Analysis</h3>
+                <div class="transcript-list" id="transcript-list">
+                    <div class="empty-state">Loading transcript...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.08)';
+
+        const interviewId = {{ interview_id }};
+
+        // Fetch interview details
+        async function loadInterviewDetails() {
+            try {
+                const response = await fetch(`/api/interview/${interviewId}/details`);
+                const data = await response.json();
+
+                if (data.success) {
+                    displayInterview(data.interview);
+                    displayTranscript(data.transcript);
+                    displayAnalysis(data.analysis);
+                    displaySummary(data.summary);
+                } else {
+                    document.querySelector('.details-main').innerHTML = `
+                        <div class="empty-state">
+                            <h2>Interview Not Found</h2>
+                            <p>${data.error}</p>
+                            <a href="/dashboard" class="btn btn-primary">Back to Dashboard</a>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to load interview:', error);
+            }
+        }
+
+        function displayInterview(interview) {
+            document.getElementById('interview-title').textContent =
+                `Interview: ${interview.student_name || 'Anonymous Student'}`;
+            document.getElementById('student-name').textContent =
+                interview.student_name || 'Anonymous';
+            document.getElementById('program').textContent =
+                interview.program || '--';
+            document.getElementById('interview-type').textContent =
+                (interview.interview_type || 'admission').charAt(0).toUpperCase() +
+                (interview.interview_type || 'admission').slice(1);
+            document.getElementById('interview-date').textContent =
+                new Date(interview.created_at).toLocaleDateString('en-US', {
+                    month: 'long', day: 'numeric', year: 'numeric'
+                });
+            document.getElementById('status').textContent =
+                (interview.status || 'completed').charAt(0).toUpperCase() +
+                (interview.status || 'completed').slice(1);
+        }
+
+        function displaySummary(summary) {
+            if (!summary) return;
+
+            document.getElementById('dominant-sentiment').textContent =
+                summary.dominant_sentiment || '--';
+            document.getElementById('dominant-sentiment').className =
+                'analysis-value sentiment-' + (summary.dominant_sentiment || '').toLowerCase();
+
+            document.getElementById('dominant-emotion').textContent =
+                summary.dominant_emotion || '--';
+
+            document.getElementById('engagement-score').textContent =
+                summary.avg_engagement_score ?
+                    summary.avg_engagement_score.toFixed(1) + '/10' : '--';
+        }
+
+        function displayTranscript(transcript) {
+            const container = document.getElementById('transcript-list');
+
+            if (!transcript || transcript.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        No transcript available for this interview.
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = transcript.map((item, index) => `
+                <div class="transcript-item">
+                    <div class="transcript-speaker">🎓 Student</div>
+                    <div class="transcript-text">${item.text}</div>
+                    ${item.sentiment ? `
+                        <div class="transcript-analysis">
+                            <span class="analysis-tag">Sentiment: ${item.sentiment}</span>
+                            ${item.emotion ? `<span class="analysis-tag">Emotion: ${item.emotion}</span>` : ''}
+                            ${item.engagement ? `<span class="analysis-tag">Engagement: ${item.engagement}/10</span>` : ''}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function displayAnalysis(analysis) {
+            if (!analysis) return;
+
+            // Sentiment chart
+            const sentiments = { Positive: 0, Neutral: 0, Negative: 0 };
+            analysis.forEach(a => {
+                if (a.sentiment_label) {
+                    sentiments[a.sentiment_label] = (sentiments[a.sentiment_label] || 0) + 1;
+                }
+            });
+
+            new Chart(document.getElementById('sentimentChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Positive', 'Neutral', 'Negative'],
+                    datasets: [{
+                        data: [sentiments.Positive, sentiments.Neutral, sentiments.Negative],
+                        backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
+
+            // Emotion chart
+            const emotions = {};
+            analysis.forEach(a => {
+                if (a.emotions_json) {
+                    try {
+                        const emo = JSON.parse(a.emotions_json);
+                        Object.entries(emo).forEach(([key, val]) => {
+                            emotions[key] = (emotions[key] || 0) + val;
+                        });
+                    } catch (e) { }
+                }
+            });
+
+            const emoLabels = Object.keys(emotions);
+            const emoValues = Object.values(emotions);
+
+            new Chart(document.getElementById('emotionChart'), {
+                type: 'radar',
+                data: {
+                    labels: emoLabels.length ? emoLabels : ['joy', 'sadness', 'anger', 'fear', 'surprise'],
+                    datasets: [{
+                        label: 'Emotions',
+                        data: emoValues.length ? emoValues : [0, 0, 0, 0, 0],
+                        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                        borderColor: '#6366f1',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.08)' }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Load on page ready
+        document.addEventListener('DOMContentLoaded', loadInterviewDetails);
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview Room - {{ room_id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/interview.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="interview-container">
+        <!-- Header -->
+        <header class="interview-header">
+            <div class="header-left">
+                <span class="logo-badge small">
+                    <span class="logo-icon">🎓</span>
+                    <span class="logo-text">InterviewAI</span>
+                </span>
+                <div class="room-info">
+                    <span class="room-label">Room Code:</span>
+                    <span class="room-code" id="room-code">{{ room_id }}</span>
+                    <button class="copy-btn" onclick="copyRoomCode()" title="Copy room code">
+                        📋
+                    </button>
+                </div>
+            </div>
+            <div class="header-center">
+                <div class="recording-status" id="recording-status">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Not Recording</span>
+                </div>
+                <div class="timer" id="timer">00:00:00</div>
+            </div>
+            <div class="header-right">
+                <span class="role-badge {{ role }}">{{ role | capitalize }}</span>
+                <span class="connection-status" id="connection-status">
+                    <span class="status-indicator disconnected"></span>
+                    Connecting...
+                </span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="interview-main">
+            <!-- Video Grid -->
+            <div class="video-grid">
+                <!-- Remote Video (Other Participant) -->
+                <div class="video-wrapper remote-video">
+                    <video id="remote-video" autoplay playsinline></video>
+                    <div class="video-overlay">
+                        <span class="participant-name" id="remote-name">Waiting for participant...</span>
+                    </div>
+                    <div class="video-placeholder" id="remote-placeholder">
+                        <div class="placeholder-icon">👤</div>
+                        <p>Waiting for {{ 'student' if role == 'interviewer' else 'interviewer' }} to join...</p>
+                    </div>
+                </div>
+
+                <!-- Local Video (Self) -->
+                <div class="video-wrapper local-video">
+                    <video id="local-video" autoplay playsinline muted></video>
+                    <div class="video-overlay">
+                        <span class="participant-name">You ({{ role | capitalize }})</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <aside class="interview-sidebar">
+                <!-- Metadata Panel -->
+                <div class="sidebar-panel metadata-panel">
+                    <h3>📋 Interview Details</h3>
+                    <form id="metadata-form">
+                        <div class="form-group">
+                            <label>Interview Type</label>
+                            <select id="interview-type">
+                                <option value="admission">Admission Interview</option>
+                                <option value="exit">Exit Interview</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Program</label>
+                            <input type="text" id="program" placeholder="e.g., BS Computer Science">
+                        </div>
+                        <div class="form-group">
+                            <label>Cohort</label>
+                            <input type="text" id="cohort" placeholder="e.g., 2024">
+                        </div>
+                        <div class="form-group">
+                            <label>Student Name</label>
+                            <input type="text" id="student-name" placeholder="Student's full name">
+                        </div>
+                        <button type="submit" class="btn btn-small btn-secondary">Save Details</button>
+                    </form>
+                </div>
+
+                <!-- Live Transcript Panel -->
+                <div class="sidebar-panel transcript-panel">
+                    <h3>📝 Live Transcript</h3>
+                    <div class="transcript-content" id="transcript-content">
+                        <p class="transcript-placeholder">Transcript will appear here when recording starts...</p>
+                    </div>
+                </div>
+
+                <!-- Analysis Panel -->
+                <div class="sidebar-panel analysis-panel">
+                    <h3>🤖 Live Analysis</h3>
+                    <div class="analysis-content" id="analysis-content">
+                        <div class="analysis-item">
+                            <span class="analysis-label">Sentiment</span>
+                            <span class="analysis-value" id="live-sentiment">--</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">Emotion</span>
+                            <span class="analysis-value" id="live-emotion">--</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">Engagement</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="engagement-bar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Controls -->
+        <footer class="interview-controls">
+            <div class="controls-group left-controls">
+                <button class="control-btn" id="mic-btn" onclick="toggleMic()">
+                    <span class="btn-icon">🎤</span>
+                    <span class="btn-label">Mute</span>
+                </button>
+                <button class="control-btn" id="camera-btn" onclick="toggleCamera()">
+                    <span class="btn-icon">📹</span>
+                    <span class="btn-label">Camera</span>
+                </button>
+            </div>
+
+            <div class="controls-group center-controls">
+                <button class="control-btn record-btn" id="record-btn" onclick="toggleRecording()">
+                    <span class="btn-icon">⏺️</span>
+                    <span class="btn-label">Start Recording</span>
+                </button>
+                <button class="control-btn end-btn" id="end-btn" onclick="endInterview()">
+                    <span class="btn-icon">📞</span>
+                    <span class="btn-label">End Interview</span>
+                </button>
+            </div>
+
+            <div class="controls-group right-controls">
+                <button class="control-btn" onclick="toggleTranscript()">
+                    <span class="btn-icon">📝</span>
+                    <span class="btn-label">Transcript</span>
+                </button>
+                <button class="control-btn" onclick="downloadRecording()">
+                    <span class="btn-icon">💾</span>
+                    <span class="btn-label">Save</span>
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Hidden data -->
+    <input type="hidden" id="room-id" value="{{ room_id }}">
+    <input type="hidden" id="user-role" value="{{ role }}">
+
+    <!-- Scripts -->
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/webrtc.js') }}"></script>
+</body>
+
+</html>

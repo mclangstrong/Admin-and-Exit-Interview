@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard - InterviewAI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Dashboard-specific styles */
+        .dashboard-container {
+            min-height: 100vh;
+            background: var(--bg-primary);
+        }
+
+        .dashboard-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .dashboard-nav {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-link {
+            padding: 0.5rem 1rem;
+            color: var(--text-secondary);
+            border-radius: var(--radius-sm);
+            transition: all var(--transition-fast);
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .dashboard-main {
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .dashboard-title {
+            margin-bottom: 2rem;
+        }
+
+        .dashboard-title h1 {
+            font-size: 1.75rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .dashboard-title p {
+            color: var(--text-secondary);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--accent-gradient);
+        }
+
+        .stat-icon {
+            font-size: 2rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .stat-change {
+            font-size: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .stat-change.positive {
+            color: var(--success);
+        }
+
+        .stat-change.negative {
+            color: var(--danger);
+        }
+
+        /* Charts Grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+        }
+
+        .chart-card.wide {
+            grid-column: span 2;
+        }
+
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .chart-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .chart-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chart-btn {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .chart-btn:hover,
+        .chart-btn.active {
+            background: var(--accent-primary);
+            color: white;
+            border-color: var(--accent-primary);
+        }
+
+        .chart-container {
+            height: 250px;
+            position: relative;
+        }
+
+        /* Recent Interviews Table */
+        .table-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .table-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .interviews-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .interviews-table th,
+        .interviews-table td {
+            padding: 0.875rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .interviews-table th {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .interviews-table td {
+            font-size: 0.875rem;
+        }
+
+        .interviews-table tr:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 100px;
+        }
+
+        .badge.positive {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--success);
+        }
+
+        .badge.neutral {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        .badge.negative {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+
+        .badge.admission {
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--accent-primary);
+        }
+
+        .badge.exit {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--accent-secondary);
+        }
+
+        /* Insights Panel */
+        .insights-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+        }
+
+        .insight-item {
+            display: flex;
+            gap: 1rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .insight-item:last-child {
+            border-bottom: none;
+        }
+
+        .insight-icon {
+            font-size: 1.5rem;
+            flex-shrink: 0;
+        }
+
+        .insight-content h4 {
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .insight-content p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .chart-card.wide {
+                grid-column: span 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-header {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="dashboard-header">
+            <div class="logo-badge">
+                <span class="logo-icon">🎓</span>
+                <span class="logo-text">InterviewAI</span>
+            </div>
+            <nav class="dashboard-nav">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link active">Dashboard</a>
+                <a href="/create-interview" class="nav-link">New Interview</a>
+            </nav>
+            <div class="header-actions">
+                <button class="btn btn-small btn-secondary" onclick="exportReport()">
+                    📄 Export Report
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="dashboard-main">
+            <div class="dashboard-title">
+                <h1>📊 Analytics Dashboard</h1>
+                <p>Interview analysis insights and trends</p>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📹</div>
+                    <div class="stat-value" id="total-interviews">0</div>
+                    <div class="stat-label">Total Interviews</div>
+                    <div class="stat-change positive">↑ 12% this month</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">😊</div>
+                    <div class="stat-value" id="positive-rate">0%</div>
+                    <div class="stat-label">Positive Sentiment</div>
+                    <div class="stat-change positive">↑ 5% vs last month</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📈</div>
+                    <div class="stat-value" id="avg-engagement">0</div>
+                    <div class="stat-label">Avg Engagement Score</div>
+                    <div class="stat-change positive">↑ 0.3 pts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🎓</div>
+                    <div class="stat-value" id="unique-students">0</div>
+                    <div class="stat-label">Students Interviewed</div>
+                    <div class="stat-change neutral">→ Same as last month</div>
+                </div>
+            </div>
+
+            <!-- Charts Grid -->
+            <div class="charts-grid">
+                <!-- Sentiment Distribution -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Sentiment Distribution</h3>
+                        <div class="chart-actions">
+                            <button class="chart-btn active">All Time</button>
+                            <button class="chart-btn">This Month</button>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="sentimentChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Emotion Breakdown -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Emotion Breakdown</h3>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="emotionChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Sentiment Trend -->
+                <div class="chart-card wide">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Sentiment Trend Over Time</h3>
+                        <div class="chart-actions">
+                            <button class="chart-btn">7 Days</button>
+                            <button class="chart-btn active">30 Days</button>
+                            <button class="chart-btn">90 Days</button>
+                        </div>
+                    </div>
+                    <div class="chart-container" style="height: 300px;">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Topic Distribution -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Top Discussion Topics</h3>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="topicChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Interview Types -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <h3 class="chart-title">Interview Types</h3>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="typeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Interviews Table -->
+            <div class="table-card">
+                <div class="table-header">
+                    <h3 class="chart-title">Recent Interviews</h3>
+                    <button class="btn btn-small btn-outline">View All</button>
+                </div>
+                <table class="interviews-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Student</th>
+                            <th>Program</th>
+                            <th>Type</th>
+                            <th>Sentiment</th>
+                            <th>Engagement</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="interviews-tbody">
+                        <!-- Populated dynamically -->
+                        <tr>
+                            <td>Dec 9, 2024</td>
+                            <td>Juan Dela Cruz</td>
+                            <td>BS Computer Science</td>
+                            <td><span class="badge admission">Admission</span></td>
+                            <td><span class="badge positive">Positive</span></td>
+                            <td>8.5/10</td>
+                            <td><button class="chart-btn">View</button></td>
+                        </tr>
+                        <tr>
+                            <td>Dec 8, 2024</td>
+                            <td>Maria Santos</td>
+                            <td>BS Information Technology</td>
+                            <td><span class="badge exit">Exit</span></td>
+                            <td><span class="badge neutral">Neutral</span></td>
+                            <td>6.2/10</td>
+                            <td><button class="chart-btn">View</button></td>
+                        </tr>
+                        <tr>
+                            <td>Dec 7, 2024</td>
+                            <td>Pedro Reyes</td>
+                            <td>BS Computer Science</td>
+                            <td><span class="badge admission">Admission</span></td>
+                            <td><span class="badge positive">Positive</span></td>
+                            <td>9.1/10</td>
+                            <td><button class="chart-btn">View</button></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- AI Insights -->
+            <div class="insights-panel">
+                <h3 class="chart-title" style="margin-bottom: 1rem;">🤖 AI-Generated Insights</h3>
+                <div class="insight-item">
+                    <div class="insight-icon">📊</div>
+                    <div class="insight-content">
+                        <h4>Curriculum is the Most Discussed Topic</h4>
+                        <p>45% of interviews mention curriculum-related concerns. Consider gathering more specific
+                            feedback on course content.</p>
+                    </div>
+                </div>
+                <div class="insight-item">
+                    <div class="insight-icon">⚠️</div>
+                    <div class="insight-content">
+                        <h4>Academic Stress Indicators Detected</h4>
+                        <p>18% of recent exit interviews show signs of academic stress. Recommend expanding counseling
+                            services.</p>
+                    </div>
+                </div>
+                <div class="insight-item">
+                    <div class="insight-icon">💼</div>
+                    <div class="insight-content">
+                        <h4>Strong Career Orientation in Admission Interviews</h4>
+                        <p>New students show high interest in career outcomes. Strengthen industry partnership
+                            messaging.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Chart.js configuration
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.08)';
+
+        // Chart instances (for updating)
+        let sentimentChart, emotionChart, trendChart, topicChart, typeChart;
+
+        // Initialize charts with empty data
+        function initCharts() {
+            // Sentiment Distribution (Doughnut)
+            sentimentChart = new Chart(document.getElementById('sentimentChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Positive', 'Neutral', 'Negative'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+
+            // Emotion Breakdown (Radar)
+            emotionChart = new Chart(document.getElementById('emotionChart'), {
+                type: 'radar',
+                data: {
+                    labels: ['joy', 'sadness', 'anger', 'fear', 'surprise', 'love'],
+                    datasets: [{
+                        label: 'Emotion Distribution',
+                        data: [0, 0, 0, 0, 0, 0],
+                        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                        borderColor: '#6366f1',
+                        borderWidth: 2,
+                        pointBackgroundColor: '#6366f1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.08)' }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            // Sentiment Trend (Line)
+            trendChart = new Chart(document.getElementById('trendChart'), {
+                type: 'line',
+                data: {
+                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    datasets: [
+                        {
+                            label: 'Positive',
+                            data: [0, 0, 0, 0],
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Neutral',
+                            data: [0, 0, 0, 0],
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Negative',
+                            data: [0, 0, 0, 0],
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } },
+                    scales: { y: { beginAtZero: true, max: 100 } }
+                }
+            });
+
+            // Topic Distribution (Bar)
+            topicChart = new Chart(document.getElementById('topicChart'), {
+                type: 'bar',
+                data: {
+                    labels: ['Curriculum', 'Career', 'Faculty', 'Facilities', 'Support'],
+                    datasets: [{
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe'],
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            // Interview Types (Pie)
+            typeChart = new Chart(document.getElementById('typeChart'), {
+                type: 'pie',
+                data: {
+                    labels: ['Admission', 'Exit'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#6366f1', '#8b5cf6'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
+        }
+
+        // Fetch dashboard data from API
+        async function loadDashboardData() {
+            try {
+                // Fetch stats
+                const statsResponse = await fetch('/api/dashboard/stats');
+                const statsData = await statsResponse.json();
+
+                if (statsData.success) {
+                    const stats = statsData.stats;
+
+                    // Update stat cards
+                    document.getElementById('total-interviews').textContent = stats.total_interviews || 0;
+                    document.getElementById('positive-rate').textContent = (stats.positive_rate || 0) + '%';
+                    document.getElementById('avg-engagement').textContent = stats.avg_engagement || 0;
+                    document.getElementById('unique-students').textContent = stats.unique_students || 0;
+
+                    // Update sentiment chart
+                    const sentDist = stats.sentiment_distribution || {};
+                    sentimentChart.data.datasets[0].data = [
+                        sentDist['Positive'] || 0,
+                        sentDist['Neutral'] || 0,
+                        sentDist['Negative'] || 0
+                    ];
+                    sentimentChart.update();
+
+                    // Update emotion chart
+                    const emoDist = stats.emotion_distribution || {};
+                    emotionChart.data.datasets[0].data = [
+                        emoDist['joy'] || 0,
+                        emoDist['sadness'] || 0,
+                        emoDist['anger'] || 0,
+                        emoDist['fear'] || 0,
+                        emoDist['surprise'] || 0,
+                        emoDist['love'] || 0
+                    ];
+                    emotionChart.update();
+
+                    // Update type chart
+                    const typeDist = stats.type_distribution || {};
+                    typeChart.data.datasets[0].data = [
+                        typeDist['admission'] || 0,
+                        typeDist['exit'] || 0
+                    ];
+                    typeChart.update();
+                }
+
+                // Fetch recent interviews
+                const recentResponse = await fetch('/api/dashboard/recent');
+                const recentData = await recentResponse.json();
+
+                if (recentData.success) {
+                    populateInterviewsTable(recentData.interviews);
+                }
+
+            } catch (error) {
+                console.error('Failed to load dashboard data:', error);
+            }
+        }
+
+        // Populate interviews table
+        function populateInterviewsTable(interviews) {
+            const tbody = document.getElementById('interviews-tbody');
+
+            if (!interviews || interviews.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; color: var(--text-muted);">
+                            No interviews yet. <a href="/create-interview">Start one now!</a>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = interviews.map(interview => {
+                const date = new Date(interview.created_at).toLocaleDateString('en-US', {
+                    month: 'short', day: 'numeric', year: 'numeric'
+                });
+                const sentiment = interview.dominant_sentiment || 'Unknown';
+                const sentimentClass = sentiment.toLowerCase();
+                const type = interview.interview_type || 'admission';
+                const engagement = interview.avg_engagement_score ?
+                    (interview.avg_engagement_score).toFixed(1) + '/10' : '--';
+
+                return `
+                    <tr>
+                        <td>${date}</td>
+                        <td>${interview.student_name || 'Anonymous'}</td>
+                        <td>${interview.program || '--'}</td>
+                        <td><span class="badge ${type}">${type.charAt(0).toUpperCase() + type.slice(1)}</span></td>
+                        <td><span class="badge ${sentimentClass}">${sentiment}</span></td>
+                        <td>${engagement}</td>
+                        <td><button class="chart-btn" onclick="viewInterview(${interview.id})">View</button></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // View interview details
+        function viewInterview(interviewId) {
+            window.location.href = `/interview/${interviewId}`;
+        }
+
+        // Export function
+        function exportReport() {
+            alert('Report export functionality coming soon!');
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            loadDashboardData();
+
+            // Refresh data every 10 seconds for real-time updates
+            setInterval(loadDashboardData, 10000);
+        });
+    </script>
+</body>
+
+</html>

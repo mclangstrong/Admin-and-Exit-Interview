@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interview Analysis System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="landing-container">
+        <!-- User Header -->
+        {% if user %}
+        <div class="user-header">
+            <div class="user-info">
+                <span class="user-avatar">👤</span>
+                <span class="user-name">{{ user.full_name or user.username }}</span>
+                <span class="user-role badge {{ user.role }}">{{ user.role | capitalize }}</span>
+            </div>
+            <a href="/logout" class="btn btn-small btn-outline">Logout</a>
+        </div>
+        <style>
+            .user-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 1rem 2rem;
+                background: var(--bg-secondary);
+                border-bottom: 1px solid var(--border-color);
+            }
+
+            .user-info {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+
+            .user-avatar {
+                font-size: 1.5rem;
+            }
+
+            .user-name {
+                font-weight: 500;
+            }
+
+            .user-role {
+                padding: 0.25rem 0.5rem;
+                font-size: 0.7rem;
+                text-transform: uppercase;
+            }
+
+            .user-role.admin {
+                background: rgba(239, 68, 68, 0.2);
+                color: var(--danger);
+            }
+
+            .user-role.user {
+                background: rgba(99, 102, 241, 0.2);
+                color: var(--accent-primary);
+            }
+        </style>
+        {% endif %}
+
+        <!-- Hero Section -->
+        <header class="hero">
+            <div class="hero-content">
+                <div class="logo-badge">
+                    <span class="logo-icon">🎓</span>
+                    <span class="logo-text">InterviewAI</span>
+                </div>
+                <h1 class="hero-title">AI-Driven Interview Analysis</h1>
+                <p class="hero-subtitle">
+                    Conduct admission and exit interviews with real-time video conferencing,
+                    automatic transcription, and AI-powered sentiment analysis.
+                </p>
+            </div>
+        </header>
+
+        <!-- Main Actions -->
+        <main class="actions-section">
+            <div class="action-cards">
+                <!-- Create Interview Card -->
+                <div class="action-card create-card">
+                    <div class="card-icon">📹</div>
+                    <h2>Start New Interview</h2>
+                    <p>Create a new interview room as the interviewer. Share the room code with the student.</p>
+                    <a href="/create-interview" class="btn btn-primary">
+                        <span>Create Room</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                    </a>
+                </div>
+
+                <!-- Join Interview Card -->
+                <div class="action-card join-card">
+                    <div class="card-icon">🔗</div>
+                    <h2>Join Interview</h2>
+                    <p>Enter the room code provided by your interviewer to join the session.</p>
+                    <form id="join-form" class="join-form">
+                        <input type="text" id="room-code" placeholder="Enter Room Code" maxlength="8"
+                            pattern="[A-Za-z0-9]+" required>
+                        <button type="submit" class="btn btn-secondary">
+                            <span>Join Room</span>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" />
+                            </svg>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Dashboard Card (Admin Only) -->
+                {% if user and user.role == 'admin' %}
+                <div class="action-card dashboard-card">
+                    <div class="card-icon">📊</div>
+                    <h2>Analytics Dashboard</h2>
+                    <p>View interview analytics, sentiment trends, and topic distributions.</p>
+                    <a href="/dashboard" class="btn btn-outline">
+                        <span>Open Dashboard</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M3 3v18h18" />
+                            <path d="M18 17V9M13 17V5M8 17v-3" />
+                        </svg>
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </main>
+
+        <!-- Features Section -->
+        <section class="features-section">
+            <h2 class="section-title">Powered by AI</h2>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <div class="feature-icon">🎙️</div>
+                    <h3>Speech Recognition</h3>
+                    <p>Automatic transcription with speaker separation</p>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">💭</div>
+                    <h3>Sentiment Analysis</h3>
+                    <p>Classify responses as Positive, Neutral, or Negative</p>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">📝</div>
+                    <h3>Topic Modeling</h3>
+                    <p>Extract recurring themes and key phrases</p>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">😊</div>
+                    <h3>Emotion Detection</h3>
+                    <p>Analyze emotional tone from voice</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>AI-Driven Admission & Exit Interview Analysis System</p>
+            <p class="footer-sub">Built with ❤️ for Computer Science Students</p>
+        </footer>
+    </div>
+
+    <script>
+        // Join form handler
+        document.getElementById('join-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const roomCode = document.getElementById('room-code').value.toUpperCase();
+            if (roomCode) {
+                window.location.href = `/join/${roomCode}`;
+            }
+        });
+
+        // Auto-uppercase room code input
+        document.getElementById('room-code').addEventListener('input', function (e) {
+            e.target.value = e.target.value.toUpperCase();
+        });
+    </script>
+</body>
+
+</html>
