@@ -68,7 +68,8 @@
                 </div>
             </div>
 
-            <!-- Sidebar -->
+            <!-- Sidebar (Only visible to interviewer) -->
+            {% if role == 'interviewer' %}
             <aside class="interview-sidebar">
                 <!-- Metadata Panel -->
                 <div class="sidebar-panel metadata-panel">
@@ -126,6 +127,7 @@
                     </div>
                 </div>
             </aside>
+            {% endif %}
         </main>
 
         <!-- Controls -->
@@ -142,10 +144,12 @@
             </div>
 
             <div class="controls-group center-controls">
+                {% if role == 'interviewer' %}
                 <button class="control-btn record-btn" id="record-btn" onclick="toggleRecording()">
                     <span class="btn-icon">⏺️</span>
                     <span class="btn-label">Start Recording</span>
                 </button>
+                {% endif %}
                 <button class="control-btn end-btn" id="end-btn" onclick="endInterview()">
                     <span class="btn-icon">📞</span>
                     <span class="btn-label">End Interview</span>

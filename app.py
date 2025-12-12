@@ -683,21 +683,126 @@ def handle_interview_ended(data):
     emit('interview-ended', {'timestamp': datetime.now().isoformat()}, room=room_id)
 
 
+@socketio.on('transcript-line')
+def handle_transcript_line(data):
+    """Broadcast transcript line to all participants in the room."""
+    room_id = data.get('room_id')
+    print(f"📝 Broadcasting transcript line to room {room_id}: {data.get('text')[:50]}...")
+    
+    # Broadcast to everyone in the room
+    emit('transcript-line', data, room=room_id)
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
+
+def generate_ssl_certificate():
+    """Generate self-signed SSL certificate if it doesn't exist."""
+    import socket
+    from OpenSSL import crypto
+    
+    # Get local IP address
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    
+    print("🔐 Generating SSL certificate...")
+    print(f"   Hostname: {hostname}")
+    print(f"   Local IP: {local_ip}")
+    
+    # Create a key pair
+    key = crypto.PKey()
+    key.generate_key(crypto.TYPE_RSA, 2048)
+    
+    # Create a self-signed cert
+    cert = crypto.X509()
+    cert.get_subject().C = "PH"
+    cert.get_subject().ST = "Metro Manila"
+    cert.get_subject().L = "Manila"
+    cert.get_subject().O = "InterviewAI"
+    cert.get_subject().OU = "Development"
+    cert.get_subject().CN = local_ip
+    
+    # Add Subject Alternative Names (SANs)
+    san_list = [
+        f"DNS:localhost",
+        f"DNS:{hostname}",
+        f"IP:127.0.0.1",
+        f"IP:{local_ip}"
+    ]
+    san_extension = crypto.X509Extension(
+        b"subjectAltName",
+        False,
+        ", ".join(san_list).encode()
+    )
+    cert.add_extensions([san_extension])
+    
+    cert.set_serial_number(1000)
+    cert.gmtime_adj_notBefore(0)
+    cert.gmtime_adj_notAfter(365*24*60*60)  # Valid for 1 year
+    cert.set_issuer(cert.get_subject())
+    cert.set_pubkey(key)
+    cert.sign(key, 'sha256')
+    
+    # Save certificate and key
+    with open("cert.pem", "wb") as f:
+        f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
+    
+    with open("key.pem", "wb") as f:
+        f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, key))
+    
+    print("✅ SSL certificate generated successfully!")
+    return True
+
 
 if __name__ == '__main__':
     print("=" * 60)
     print("   AI-DRIVEN INTERVIEW ANALYSIS SYSTEM")
     print("=" * 60)
-    print("🌐 Starting server on http://localhost:5000")
-    print("📹 Video conferencing ready")
-    print("🤖 NLP analysis pipeline with trained mBERT model")
-    print("💾 SQLite database connected")
-    print("=" * 60)
     
     # Pre-load the analyzer
     get_analyzer()
     
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Check if SSL certificates exist, generate if not
+    import os
+    cert_file = 'cert.pem'
+    key_file = 'key.pem'
+    
+    if not os.path.exists(cert_file) or not os.path.exists(key_file):
+        print("📝 SSL certificates not found. Generating...")
+        try:
+            generate_ssl_certificate()
+        except Exception as e:
+            print(f"⚠️  Failed to generate certificate: {e}")
+            print("   Falling back to HTTP mode")
+    
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        print("🔒 HTTPS mode enabled")
+        print("🌐 Server URLs:")
+        print("   - https://localhost:5000")
+        print("   - https://192.168.123.40:5000")
+        print("📹 Video conferencing ready (camera/mic enabled)")
+        print("🤖 NLP analysis pipeline with trained mBERT model")
+        print("💾 SQLite database connected")
+        print("=" * 60)
+        print("⚠️  Note: You'll see a security warning in browser.")
+        print("   Click 'Advanced' → 'Proceed to site' (safe for local network)")
+        print("=" * 60)
+        
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+        
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, ssl_context=context)
+    else:
+        print("⚠️  HTTP mode")
+        print("🌐 Server URLs:")
+        print("   - http://localhost:5000 (camera/mic works)")
+        print("   - http://192.168.123.40:5000 (camera/mic blocked by browser)")
+        print("📹 Video conferencing ready")
+        print("🤖 NLP analysis pipeline with trained mBERT model")
+        print("💾 SQLite database connected")
+        print("=" * 60)
+        
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+

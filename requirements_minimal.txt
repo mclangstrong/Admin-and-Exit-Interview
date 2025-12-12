@@ -1,0 +1,16 @@
+flask
+flask-socketio
+eventlet
+numpy
+pandas
+torch
+scikit-learn
+transformers
+datasets
+openpyxl
+accelerate>=0.26.0
+keybert
+sentence-transformers
+librosa
+soundfile
+pydub
