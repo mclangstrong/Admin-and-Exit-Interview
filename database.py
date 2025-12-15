@@ -111,6 +111,7 @@ def init_database():
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             full_name TEXT,
+            course TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login TIMESTAMP
         )
@@ -137,7 +138,7 @@ def init_database():
 # ============================================================================
 
 def create_user(username: str, password: str, role: str = 'user', 
-                full_name: str = '', email: str = '') -> Optional[int]:
+                full_name: str = '', email: str = '', course: str = '') -> Optional[int]:
     """Create a new user."""
     import hashlib
     
@@ -148,9 +149,9 @@ def create_user(username: str, password: str, role: str = 'user',
     
     try:
         cursor.execute('''
-            INSERT INTO users (username, password_hash, role, full_name, email)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (username, password_hash, role, full_name, email))
+            INSERT INTO users (username, password_hash, role, full_name, email, course)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (username, password_hash, role, full_name, email, course))
         
         user_id = cursor.lastrowid
         conn.commit()
@@ -198,7 +199,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT id, username, role, full_name, email, created_at, last_login
+        SELECT id, username, role, full_name, email, course, created_at, last_login
         FROM users WHERE id = ?
     ''', (user_id,))
     

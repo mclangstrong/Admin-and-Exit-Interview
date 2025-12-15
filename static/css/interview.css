@@ -209,13 +209,21 @@
 .local-video {
     position: absolute;
     bottom: 1rem;
-    right: 1rem;
+    left: 1rem;
+    /* Changed from right to left */
     width: 200px;
     height: 150px;
     border-radius: var(--radius-md);
     border: 2px solid var(--border-light);
     box-shadow: var(--shadow-lg);
     z-index: 10;
+    user-select: none;
+    /* Prevent text selection while dragging */
+    transition: box-shadow 0.2s ease;
+}
+
+.local-video:hover {
+    box-shadow: 0 8px 32px rgba(99, 102, 241, 0.3);
 }
 
 .video-overlay {
@@ -512,6 +520,8 @@
     .local-video {
         width: 150px;
         height: 112px;
+        left: 1rem;
+        /* Keep on left side */
     }
 }
 

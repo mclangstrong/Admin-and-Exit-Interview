@@ -135,6 +135,7 @@ def register():
         confirm_password = request.form.get('confirm_password')
         full_name = request.form.get('full_name')
         email = request.form.get('email', '')
+        course = request.form.get('course', '')
         
         if password != confirm_password:
             return render_template('register.html', error='Passwords do not match')
@@ -142,7 +143,10 @@ def register():
         if len(password) < 6:
             return render_template('register.html', error='Password must be at least 6 characters')
         
-        user_id = db.create_user(username, password, role='user', full_name=full_name, email=email)
+        if not course:
+            return render_template('register.html', error='Please select a course')
+        
+        user_id = db.create_user(username, password, role='user', full_name=full_name, email=email, course=course)
         
         if user_id:
             return redirect(url_for('login', success='Account created! Please sign in.'))
@@ -220,7 +224,19 @@ def join_interview(room_id):
         else:
             return render_template('error.html', message='Interview room not found.'), 404
     
-    return render_template('interview_room.html', room_id=room_id, role='student')
+    # Get student data from session for auto-fill
+    student_data = None
+    if 'user_id' in session:
+        user_id = session['user_id']
+        user = db.get_user_by_id(user_id)
+        if user:
+            student_data = {
+                'name': user.get('full_name', ''),
+                'course': user.get('course', ''),
+                'cohort': datetime.now().strftime('%d/%m/%Y')  # Today's date in dd/mm/yyyy
+            }
+    
+    return render_template('interview_room.html', room_id=room_id, role='student', student_data=student_data)
 
 
 @app.route('/dashboard')
@@ -622,11 +638,24 @@ def handle_join_room(data):
     participant_count = len(active_rooms[room_id]['participants'])
     print(f"✅ User {request.sid} joined room {room_id} as {role} (total: {participant_count})")
     
+    # Get user details for auto-fill if authenticated
+    user_data = {}
+    if 'user_id' in session:
+        user = db.get_user_by_id(session['user_id'])
+        if user:
+            user_data = {
+                'name': user.get('full_name', ''),
+                'course': user.get('course', ''),
+                'cohort': datetime.now().strftime('%d/%m/%Y')
+            }
+            print(f"   👤 With user data: {user_data['name']} / {user_data['course']}")
+
     # Notify all participants in the room
     emit('participant-joined', {
         'sid': request.sid,
         'role': role,
-        'count': participant_count
+        'count': participant_count,
+        'user_data': user_data
     }, room=room_id)
 
 

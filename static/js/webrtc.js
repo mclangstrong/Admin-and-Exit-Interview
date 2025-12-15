@@ -93,6 +93,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializeSocket();
     initializeSpeechRecognition();
     setupEventListeners();
+    makeDraggable(localVideo); // Make local video draggable
+    autoFillStudentData(); // Auto-fill interview details if student data available
 });
 
 async function initializeMedia() {
@@ -163,6 +165,12 @@ function initializeSocket() {
         console.log('   My socket ID:', socket.id);
         console.log('   Joining socket ID:', data.sid);
         console.log('   Total participants:', data.count);
+
+        // Auto-fill form if user data is provided AND it's a student joining
+        if (data.user_data && data.role === 'student') {
+            console.log('📋 Received user data for auto-fill:', data.user_data);
+            fillFormWithStudentData(data.user_data);
+        }
 
         // Create peer connection immediately when second participant joins
         if (data.count === 2) {
@@ -872,10 +880,15 @@ function updateRecordingUI(recording) {
     }
 }
 
+
 function updateConnectionStatus(status, text) {
-    const indicator = connectionStatus.querySelector('.status-indicator');
-    indicator.className = 'status-indicator ' + status;
-    connectionStatus.childNodes[1].textContent = ' ' + text;
+    if (!connectionStatus) return;
+
+    // Simply rebuild the entire content to avoid text duplication
+    connectionStatus.innerHTML = `
+        <span class="status-indicator ${status}"></span>
+        ${text}
+    `;
 }
 
 function startTimer() {
@@ -947,4 +960,155 @@ function setupEventListeners() {
             e.returnValue = 'Recording is in progress. Are you sure you want to leave?';
         }
     });
+}
+
+// ============================================================================
+// Draggable Functionality
+// ============================================================================
+
+function makeDraggable(element) {
+    if (!element) return;
+
+    let isDragging = false;
+    let currentX;
+    let currentY;
+    let initialX;
+    let initialY;
+    let xOffset = 0;
+    let yOffset = 0;
+
+    // Get the parent element (video-wrapper)
+    const container = element.parentElement;
+    if (!container) return;
+
+    // Add cursor style
+    container.style.cursor = 'move';
+
+    container.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    function dragStart(e) {
+        // Only drag if clicking on the video container, not controls
+        if (e.target === container || e.target === element) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+            isDragging = true;
+            container.style.cursor = 'grabbing';
+        }
+    }
+
+    function drag(e) {
+        if (isDragging) {
+            e.preventDefault();
+
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+
+            xOffset = currentX;
+            yOffset = currentY;
+
+            // Get viewport dimensions
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const rect = container.getBoundingClientRect();
+
+            // Constrain to viewport boundaries
+            let newLeft = currentX;
+            let newTop = currentY;
+
+            // Keep within horizontal bounds
+            if (newLeft < 0) newLeft = 0;
+            if (newLeft + rect.width > viewportWidth) {
+                newLeft = viewportWidth - rect.width;
+            }
+
+            // Keep within vertical bounds
+            if (newTop < 0) newTop = 0;
+            if (newTop + rect.height > viewportHeight) {
+                newTop = viewportHeight - rect.height;
+            }
+
+            setTranslate(newLeft, newTop, container);
+        }
+    }
+
+    function dragEnd(e) {
+        if (isDragging) {
+            initialX = currentX;
+            initialY = currentY;
+            isDragging = false;
+            container.style.cursor = 'move';
+        }
+    }
+
+    function setTranslate(xPos, yPos, el) {
+        el.style.left = xPos + 'px';
+        el.style.top = yPos + 'px';
+    }
+}
+
+// ============================================================================
+// Auto-Fill Student Data
+// ============================================================================
+
+function autoFillStudentData() {
+    // Only auto-fill if student data is available (hidden inputs exist)
+    const studentName = document.getElementById('student-name');
+    const studentCourse = document.getElementById('student-course');
+    const studentCohort = document.getElementById('student-cohort');
+
+    if (!studentName || !studentCourse || !studentCohort) {
+        console.log('ℹ️  No student data available for auto-fill');
+        return;
+    }
+
+    // Get the form fields
+    const programField = document.getElementById('program');
+    const cohortField = document.getElementById('cohort');
+    const studentNameField = document.getElementById('student-name-field');
+
+    if (programField && studentCourse.value) {
+        programField.value = studentCourse.value;
+        console.log('✅ Auto-filled Program:', studentCourse.value);
+    }
+
+    if (cohortField && studentCohort.value) {
+        cohortField.value = studentCohort.value;
+        console.log('✅ Auto-filled Cohort:', studentCohort.value);
+    }
+
+    if (studentNameField && studentName.value) {
+        studentNameField.value = studentName.value;
+        console.log('✅ Auto-filled Student Name:', studentName.value);
+    }
+
+    console.log('✅ Interview details auto-filled from student data');
+}
+
+function fillFormWithStudentData(data) {
+    if (!data) return;
+
+    // Get the form fields
+    const programField = document.getElementById('program');
+    const cohortField = document.getElementById('cohort');
+    const studentNameField = document.getElementById('student-name-field');
+
+    // Only fill if the field exists and is empty (or force update? Requirement implies auto-fill)
+    // I'll overwrite to ensure data is correct as per 'automatically filled by getting the data of the student who joined'
+
+    if (programField && data.course) {
+        programField.value = data.course;
+        console.log('✅ Socket Auto-filled Program:', data.course);
+    }
+
+    if (cohortField && data.cohort) {
+        cohortField.value = data.cohort;
+        console.log('✅ Socket Auto-filled Cohort:', data.cohort);
+    }
+
+    if (studentNameField && data.name) {
+        studentNameField.value = data.name;
+        console.log('✅ Socket Auto-filled Student Name:', data.name);
+    }
 }
