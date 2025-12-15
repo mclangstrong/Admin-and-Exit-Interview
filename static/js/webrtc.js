@@ -69,6 +69,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('   Use localhost or HTTPS for full functionality.');
     }
 
+    // Verify analysis UI elements exist (interviewer only)
+    console.log('🔍 Checking for analysis UI elements...');
+    console.log('   liveSentiment:', liveSentiment ? '✅ Found' : '❌ Not found');
+    console.log('   liveEmotion:', liveEmotion ? '✅ Found' : '❌ Not found');
+    console.log('   engagementBar:', engagementBar ? '✅ Found' : '❌ Not found');
+    console.log('   transcriptContent:', transcriptContent ? '✅ Found' : '❌ Not found');
+
+    if (!liveSentiment && USER_ROLE === 'interviewer') {
+        console.error('❌ CRITICAL: Analysis elements not found but user is interviewer!');
+        console.log('   This means the HTML template may have an issue.');
+    }
+
     try {
         await initializeMedia();
     } catch (error) {
@@ -269,6 +281,36 @@ function initializeSocket() {
             if (transcriptContent) {
                 transcriptContent.scrollTop = transcriptContent.scrollHeight;
             }
+        }
+    });
+
+    socket.on('analysis-update', (data) => {
+        console.log('📊 Received analysis update:', data);
+
+        // Only update if it's from another participant (student → interviewer)
+        if (data.speaker !== USER_ROLE) {
+            const sentimentEl = document.getElementById('live-sentiment');
+            const emotionEl = document.getElementById('live-emotion');
+            const engagementEl = document.getElementById('engagement-bar');
+
+            if (sentimentEl && data.analysis.sentiment) {
+                console.log('💭 Updating interviewer sentiment to:', data.analysis.sentiment);
+                sentimentEl.textContent = data.analysis.sentiment;
+                sentimentEl.className = 'analysis-value ' + (data.analysis.sentiment.toLowerCase());
+            }
+
+            if (emotionEl && data.analysis.emotion) {
+                console.log('😊 Updating interviewer emotion to:', data.analysis.emotion);
+                emotionEl.textContent = data.analysis.emotion;
+            }
+
+            if (engagementEl && data.analysis.engagement !== undefined) {
+                const barWidth = `${data.analysis.engagement * 10}%`;
+                console.log('📈 Updating interviewer engagement to:', barWidth);
+                engagementEl.style.width = barWidth;
+            }
+
+            console.log('✅ Interviewer UI updated with student analysis');
         }
     });
 }
@@ -638,8 +680,21 @@ function addTranscriptLine(speaker, text) {
 }
 
 async function analyzeTranscriptLine(text) {
+    console.log('🔍 analyzeTranscriptLine called with text:', text);
+
+    // Re-check elements exist (get fresh references each time)
+    const sentimentEl = document.getElementById('live-sentiment');
+    const emotionEl = document.getElementById('live-emotion');
+    const engagementEl = document.getElementById('engagement-bar');
+
+    console.log('🔍 Element check:');
+    console.log('   sentimentEl:', sentimentEl ? '✅' : '❌');
+    console.log('   emotionEl:', emotionEl ? '✅' : '❌');
+    console.log('   engagementEl:', engagementEl ? '✅' : '❌');
+
     try {
         // Save transcript line to database AND analyze with trained model
+        console.log('📤 Sending POST to /api/transcript...');
         const response = await fetch('/api/transcript', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -650,33 +705,87 @@ async function analyzeTranscriptLine(text) {
             })
         });
 
+        console.log('📥 Response status:', response.status);
         const result = await response.json();
+        console.log('📊 Full API response:', result);
 
         if (result.success && result.analysis) {
             const analysis = result.analysis;
+            console.log('✅ Analysis data received:', analysis);
 
-            // Update sentiment display (only if elements exist - interviewer only)
-            if (liveSentiment) {
-                liveSentiment.textContent = analysis.sentiment?.label || '--';
-                liveSentiment.className = 'analysis-value ' + (analysis.sentiment?.label?.toLowerCase() || '');
+            // Update sentiment display using fresh element reference
+            if (sentimentEl) {
+                const sentimentLabel = analysis.sentiment?.label || '--';
+                console.log('💭 Updating sentiment to:', sentimentLabel);
+                sentimentEl.textContent = sentimentLabel;
+                sentimentEl.className = 'analysis-value ' + (sentimentLabel.toLowerCase());
+                console.log('   ✅ Sentiment element updated');
+            } else {
+                console.warn('⚠️ sentimentEl not found - user may not be interviewer');
             }
 
             // Update emotion display
-            if (liveEmotion && analysis.emotions) {
+            if (emotionEl && analysis.emotions) {
                 const topEmotion = Object.entries(analysis.emotions)
                     .sort((a, b) => b[1] - a[1])[0];
-                liveEmotion.textContent = topEmotion ? topEmotion[0] : '--';
+                const emotionLabel = topEmotion ? topEmotion[0] : '--';
+                console.log('😊 Updating emotion to:', emotionLabel);
+                emotionEl.textContent = emotionLabel;
+                console.log('   ✅ Emotion element updated');
+            } else {
+                console.warn('⚠️ emotionEl not found or no emotions in analysis');
             }
 
             // Update engagement bar
-            if (engagementBar && analysis.engagement) {
-                engagementBar.style.width = `${analysis.engagement.score * 10}%`;
+            if (engagementEl && analysis.engagement) {
+                const engagementScore = analysis.engagement.score;
+                const barWidth = `${engagementScore * 10}%`;
+                console.log('📈 Updating engagement bar to:', barWidth, '(score:', engagementScore, ')');
+                engagementEl.style.width = barWidth;
+                console.log('   ✅ Engagement bar updated');
+            } else {
+                console.warn('⚠️ engagementEl not found or no engagement in analysis');
             }
+
+            console.log('✅ UI update complete');
+
+            // Broadcast analysis to other participants (interviewer)
+            console.log('📡 Broadcasting analysis to room...');
+            console.log('🔍 DEBUG: Full analysis object:', analysis);
+            console.log('🔍 DEBUG: analysis.emotions:', analysis.emotions);
+            console.log('🔍 DEBUG: typeof analysis.emotions:', typeof analysis.emotions);
+            console.log('🔍 DEBUG: Object.keys(analysis.emotions):', analysis.emotions ? Object.keys(analysis.emotions) : 'null');
+
+            // Extract top emotion from analysis data (not from DOM element)
+            let topEmotion = '--';
+            if (analysis.emotions && Object.keys(analysis.emotions).length > 0) {
+                const emotionEntries = Object.entries(analysis.emotions).sort((a, b) => b[1] - a[1]);
+                console.log('🔍 DEBUG: emotionEntries:', emotionEntries);
+                topEmotion = emotionEntries[0]?.[0] || '--';
+                console.log('🔍 DEBUG: topEmotion extracted:', topEmotion);
+            } else {
+                console.warn('⚠️ DEBUG: No emotions found or empty object');
+            }
+
+            socket.emit('analysis-update', {
+                room_id: ROOM_ID,
+                speaker: USER_ROLE,
+                analysis: {
+                    sentiment: analysis.sentiment?.label || '--',
+                    emotion: topEmotion,
+                    engagement: analysis.engagement?.score || 0
+                }
+            });
+            console.log('   ✅ Analysis broadcast sent with emotion:', topEmotion);
+        } else {
+            console.error('❌ No analysis in response or success=false:', result);
         }
     } catch (error) {
-        console.warn('Analysis failed:', error);
+        console.error('❌ Analysis failed with error:', error);
+        console.error('Error stack:', error.stack);
     }
 }
+
 
 // ============================================================================
 // Controls

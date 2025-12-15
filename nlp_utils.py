@@ -281,7 +281,19 @@ class InterviewAnalyzer:
                 print("   ✓ Sentiment model loaded from folder")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
                 # Load from single .pth file
-                self.sentiment_model = torch.load(SENTIMENT_SINGLE_FILE, map_location=self.device)
+                # PyTorch 2.6+ requires weights_only=False for models with custom classes
+                try:
+                    # Try with safe globals first (PyTorch 2.6+)
+                    torch.serialization.add_safe_globals([BertForSequenceClassification])
+                    self.sentiment_model = torch.load(
+                        SENTIMENT_SINGLE_FILE, 
+                        map_location=self.device,
+                        weights_only=False  # Required for transformers models
+                    )
+                except AttributeError:
+                    # Fallback for older PyTorch versions
+                    self.sentiment_model = torch.load(SENTIMENT_SINGLE_FILE, map_location=self.device)
+                
                 self.sentiment_model.eval()
                 # Still need tokenizer from HuggingFace
                 self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
@@ -305,6 +317,7 @@ class InterviewAnalyzer:
             print("   ✓ Emotion model loaded")
         except Exception as e:
             print(f"   ❌ Error loading emotion model: {e}")
+            print(f"   ℹ️  Will use keyword-based fallback for emotion detection")
     
     def _load_keyphrase_model(self):
         """Load KeyBERT for key phrase extraction."""
@@ -315,6 +328,7 @@ class InterviewAnalyzer:
             print("   ✓ KeyBERT loaded")
         except Exception as e:
             print(f"   ❌ Error loading KeyBERT: {e}")
+            print(f"   ℹ️  Key phrase extraction will be disabled")
     
     # ------------------------------------------------------------------------
     # ANALYSIS METHODS
@@ -384,8 +398,11 @@ class InterviewAnalyzer:
                 }
             }
         except Exception as e:
+            import traceback
             print(f"⚠️ Sentiment analysis error: {e}")
+            print(f"   Traceback: {traceback.format_exc()}")
             return {"label": "Error", "confidence": 0.0, "probabilities": {}}
+
     
     def analyze_emotion(self, text: str) -> Dict[str, float]:
         """
@@ -395,14 +412,57 @@ class InterviewAnalyzer:
             Dict mapping emotion names to scores (0-1)
         """
         if self.emotion_pipeline is None:
-            return {}
+            # Fallback to simple keyword-based emotion detection
+            return self._analyze_emotion_fallback(text)
         
         try:
             results = self.emotion_pipeline(text)[0]
             return {item['label']: round(item['score'], 4) for item in results}
         except Exception as e:
             print(f"⚠️ Emotion analysis error: {e}")
-            return {}
+            # Use fallback on error
+            return self._analyze_emotion_fallback(text)
+    
+    def _analyze_emotion_fallback(self, text: str) -> Dict[str, float]:
+        """
+        Simple keyword-based emotion detection as fallback.
+        Returns scores for 6 emotions: joy, sadness, anger, fear, love, surprise
+        """
+        text_lower = text.lower()
+        
+        # Emotion keywords (English and Tagalog)
+        emotion_keywords = {
+            'joy': ['happy', 'excited', 'great', 'amazing', 'wonderful', 'love', 'enjoy',
+                    'masaya', 'saya', 'tuwa', 'galak'],
+            'sadness': ['sad', 'unhappy', 'disappointed', 'down', 'depressed', 'upset',
+                       'malungkot', 'lungkot', 'dismaya'],
+            'anger': ['angry', 'mad', 'furious', 'annoyed', 'frustrated', 'irritated',
+                     'galit', 'inis', 'badtrip'],
+            'fear': ['afraid', 'scared', 'worried', 'anxious', 'nervous', 'concerned',
+                    'takot', 'kaba', 'nerbyos'],
+            'love': ['love', 'adore', 'care', 'appreciate', 'grateful', 'thankful',
+                    'mahal', 'pagmamahal'],
+            'surprise': ['surprised', 'shocked', 'amazed', 'unexpected', 'wow',
+                        'gulat', 'biglaan']
+        }
+        
+        # Count keyword matches
+        scores = {}
+        total_matches = 0
+        
+        for emotion, keywords in emotion_keywords.items():
+            matches = sum(1 for keyword in keywords if keyword in text_lower)
+            scores[emotion] = matches
+            total_matches += matches
+        
+        # Normalize scores (0-1 range)
+        if total_matches > 0:
+            scores = {k: round(v / total_matches, 4) for k, v in scores.items()}
+        else:
+            # No keywords found - return neutral distribution
+            scores = {k: round(1/6, 4) for k in emotion_keywords.keys()}
+        
+        return scores
     
     def calculate_engagement(self, text: str, sentiment_result: Dict = None, 
                               keyphrases: List[Dict] = None) -> Dict[str, Any]:

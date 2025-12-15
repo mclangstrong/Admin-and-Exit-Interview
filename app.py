@@ -417,18 +417,45 @@ def save_transcript_line():
     
     # Analyze with trained model
     try:
+        print(f"\n{'='*60}")
+        print(f"📝 ANALYZING TRANSCRIPT LINE")
+        print(f"{'='*60}")
+        print(f"Room ID: {room_id}")
+        print(f"Speaker: {speaker}")
+        print(f"Text: {text}")
+        print(f"Interview ID: {interview_id}")
+        
         analyzer = get_analyzer()
+        print("🤖 Analyzer loaded, starting analysis...")
+        
         analysis = analyzer.analyze(text)
+        print(f"✅ Analysis complete!")
+        print(f"   Sentiment: {analysis.get('sentiment', {}).get('label', 'N/A')}")
+        print(f"   Emotions: {list(analysis.get('emotions', {}).keys())}")
+        print(f"   Engagement: {analysis.get('engagement', {}).get('score', 'N/A')}")
         
         # Save analysis to database
         db.save_analysis(interview_id, analysis, transcript_id)
+        print("💾 Analysis saved to database")
         
-        return jsonify({
+        response_data = {
             'success': True,
             'transcript_id': transcript_id,
             'analysis': analysis
-        })
+        }
+        print(f"📤 Sending response: success={response_data['success']}, has_analysis={analysis is not None}")
+        print(f"{'='*60}\n")
+        
+        return jsonify(response_data)
     except Exception as e:
+        print(f"\n{'='*60}")
+        print(f"❌ ANALYSIS ERROR")
+        print(f"{'='*60}")
+        print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'='*60}\n")
+        
         return jsonify({
             'success': True,
             'transcript_id': transcript_id,
@@ -691,6 +718,17 @@ def handle_transcript_line(data):
     
     # Broadcast to everyone in the room
     emit('transcript-line', data, room=room_id)
+
+
+@socketio.on('analysis-update')
+def handle_analysis_update(data):
+    """Broadcast live analysis data to all participants in the room."""
+    room_id = data.get('room_id')
+    speaker = data.get('speaker', 'unknown')
+    print(f"📊 Broadcasting analysis update from {speaker} to room {room_id}")
+    
+    # Broadcast to everyone in the room (interviewer will receive it)
+    emit('analysis-update', data, room=room_id)
 
 
 # ============================================================================
