@@ -10,7 +10,8 @@ keybert
 sentence-transformers
 flask
 flask-socketio
-eventlet
+flask-wtf
+flask-limiter
 bertopic
 librosa
 soundfile

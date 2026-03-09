@@ -245,7 +245,6 @@ class InterviewAnalyzer:
             load_keyphrase: Whether to load KeyBERT for key phrases
         """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"⚙️  Device: {self.device}")
         
         self.sentiment_model = None
         self.sentiment_tokenizer = None
@@ -260,8 +259,6 @@ class InterviewAnalyzer:
         
         if load_keyphrase:
             self._load_keyphrase_model()
-        
-        print("✅ InterviewAnalyzer ready!")
     
     # ------------------------------------------------------------------------
     # MODEL LOADING
@@ -269,7 +266,6 @@ class InterviewAnalyzer:
     
     def _load_sentiment_model(self):
         """Load the trained Taglish sentiment model."""
-        print("📥 Loading Sentiment Model...")
         try:
             from transformers import BertTokenizer, BertForSequenceClassification
             
@@ -278,34 +274,24 @@ class InterviewAnalyzer:
                 self.sentiment_model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
                 self.sentiment_model.to(self.device)
                 self.sentiment_model.eval()
-                print("   ✓ Sentiment model loaded from folder")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
-                # Load from single .pth file
-                # PyTorch 2.6+ requires weights_only=False for models with custom classes
                 try:
-                    # Try with safe globals first (PyTorch 2.6+)
                     torch.serialization.add_safe_globals([BertForSequenceClassification])
                     self.sentiment_model = torch.load(
                         SENTIMENT_SINGLE_FILE, 
                         map_location=self.device,
-                        weights_only=False  # Required for transformers models
+                        weights_only=False
                     )
                 except AttributeError:
-                    # Fallback for older PyTorch versions
                     self.sentiment_model = torch.load(SENTIMENT_SINGLE_FILE, map_location=self.device)
                 
                 self.sentiment_model.eval()
-                # Still need tokenizer from HuggingFace
                 self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-                print("   ✓ Sentiment model loaded from .pth file")
-            else:
-                print("   ⚠️ Sentiment model not found. Train the model first.")
-        except Exception as e:
-            print(f"   ❌ Error loading sentiment model: {e}")
+        except Exception:
+            pass  # Sentiment will return Unknown
     
     def _load_emotion_model(self):
         """Load pre-trained emotion detection model."""
-        print("📥 Loading Emotion Model...")
         try:
             from transformers import pipeline
             self.emotion_pipeline = pipeline(
@@ -314,21 +300,16 @@ class InterviewAnalyzer:
                 top_k=None,
                 device=0 if self.device == "cuda" else -1
             )
-            print("   ✓ Emotion model loaded")
-        except Exception as e:
-            print(f"   ❌ Error loading emotion model: {e}")
-            print(f"   ℹ️  Will use keyword-based fallback for emotion detection")
+        except Exception:
+            pass  # Will use keyword-based fallback
     
     def _load_keyphrase_model(self):
         """Load KeyBERT for key phrase extraction."""
-        print("📥 Loading KeyBERT...")
         try:
             from keybert import KeyBERT
             self.keyphrase_model = KeyBERT("paraphrase-multilingual-MiniLM-L12-v2")
-            print("   ✓ KeyBERT loaded")
-        except Exception as e:
-            print(f"   ❌ Error loading KeyBERT: {e}")
-            print(f"   ℹ️  Key phrase extraction will be disabled")
+        except Exception:
+            pass  # Key phrase extraction will be disabled
     
     # ------------------------------------------------------------------------
     # ANALYSIS METHODS
@@ -545,7 +526,6 @@ class InterviewAnalyzer:
         Returns:
             Dict containing all analysis results
         """
-        print(f"\n🔍 Analyzing: \"{text[:50]}...\"" if len(text) > 50 else f"\n🔍 Analyzing: \"{text}\"")
         
         # Run all analyses
         keyphrases = self.extract_keyphrases(text)

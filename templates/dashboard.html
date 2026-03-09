@@ -322,7 +322,7 @@
                 <span class="logo-text">InterviewAI</span>
             </div>
             <nav class="dashboard-nav">
-                <a href="/" class="nav-link">Home</a>
+                <a href="/home" class="nav-link">Home</a>
                 <a href="/dashboard" class="nav-link active">Dashboard</a>
                 <a href="/create-interview" class="nav-link">New Interview</a>
             </nav>
@@ -374,9 +374,11 @@
                 <div class="chart-card">
                     <div class="chart-header">
                         <h3 class="chart-title">Sentiment Distribution</h3>
-                        <div class="chart-actions">
-                            <button class="chart-btn active">All Time</button>
-                            <button class="chart-btn">This Month</button>
+                        <div class="chart-actions" id="sentiment-filters">
+                            <button class="chart-btn active" data-filter="all" onclick="filterSentiment('all')">All
+                                Time</button>
+                            <button class="chart-btn" data-filter="month" onclick="filterSentiment('month')">This
+                                Month</button>
                         </div>
                     </div>
                     <div class="chart-container">
@@ -398,10 +400,10 @@
                 <div class="chart-card wide">
                     <div class="chart-header">
                         <h3 class="chart-title">Sentiment Trend Over Time</h3>
-                        <div class="chart-actions">
-                            <button class="chart-btn">7 Days</button>
-                            <button class="chart-btn active">30 Days</button>
-                            <button class="chart-btn">90 Days</button>
+                        <div class="chart-actions" id="trend-filters">
+                            <button class="chart-btn" data-days="7" onclick="filterTrend(7)">7 Days</button>
+                            <button class="chart-btn active" data-days="30" onclick="filterTrend(30)">30 Days</button>
+                            <button class="chart-btn" data-days="90" onclick="filterTrend(90)">90 Days</button>
                         </div>
                     </div>
                     <div class="chart-container" style="height: 300px;">
@@ -514,8 +516,8 @@
 
     <script>
         // Chart.js configuration
-        Chart.defaults.color = '#94a3b8';
-        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.08)';
+        Chart.defaults.color = '#475569';
+        Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.08)';
 
         // Chart instances (for updating)
         let sentimentChart, emotionChart, trendChart, topicChart, typeChart;
@@ -562,7 +564,7 @@
                     scales: {
                         r: {
                             beginAtZero: true,
-                            grid: { color: 'rgba(255, 255, 255, 0.08)' }
+                            grid: { color: 'rgba(0, 0, 0, 0.08)' }
                         }
                     },
                     plugins: { legend: { display: false } }
@@ -613,10 +615,10 @@
             topicChart = new Chart(document.getElementById('topicChart'), {
                 type: 'bar',
                 data: {
-                    labels: ['Curriculum', 'Career', 'Faculty', 'Facilities', 'Support'],
+                    labels: ['Academics', 'Career', 'Faculty', 'Infrastructure', 'Mental health', 'Social', 'Technology'],
                     datasets: [{
-                        data: [0, 0, 0, 0, 0],
-                        backgroundColor: ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe'],
+                        data: [0, 0, 0, 0, 0, 0, 0],
+                        backgroundColor: ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#f97316'],
                         borderRadius: 4
                     }]
                 },
@@ -624,7 +626,13 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     indexAxis: 'y',
-                    plugins: { legend: { display: false } }
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: {
+                            max: 100,
+                            ticks: { callback: (val) => val + '%' }
+                        }
+                    }
                 }
             });
 
@@ -691,6 +699,24 @@
                         typeDist['exit'] || 0
                     ];
                     typeChart.update();
+
+                    // Update topic chart with classified data
+                    const topicDist = stats.topic_distribution || {};
+                    topicChart.data.datasets[0].data = [
+                        topicDist['Academics'] || 0,
+                        topicDist['Career'] || 0,
+                        topicDist['Faculty'] || 0,
+                        topicDist['Infrastructure'] || 0,
+                        topicDist['Mental health'] || 0,
+                        topicDist['Social'] || 0,
+                        topicDist['Technology'] || 0
+                    ];
+                    topicChart.update();
+
+                    // Update trend chart with data
+                    if (stats.trend_data) {
+                        updateTrendChart(stats.trend_data, currentTrendDays);
+                    }
                 }
 
                 // Fetch recent interviews
@@ -753,6 +779,113 @@
         // Export function
         function exportReport() {
             alert('Report export functionality coming soon!');
+        }
+
+        // Store cached stats for filtering
+        let cachedStats = null;
+        let currentSentimentFilter = 'all';
+        let currentTrendDays = 30;
+
+        // Filter sentiment distribution
+        async function filterSentiment(filter) {
+            currentSentimentFilter = filter;
+
+            // Update button active states
+            document.querySelectorAll('#sentiment-filters .chart-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === filter);
+            });
+
+            // Fetch filtered data
+            try {
+                const response = await fetch(`/api/dashboard/stats?sentiment_filter=${filter}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const sentDist = data.stats.sentiment_distribution || {};
+                    sentimentChart.data.datasets[0].data = [
+                        sentDist['Positive'] || 0,
+                        sentDist['Neutral'] || 0,
+                        sentDist['Negative'] || 0
+                    ];
+                    sentimentChart.update();
+                }
+            } catch (error) {
+                console.error('Failed to filter sentiment:', error);
+            }
+        }
+
+        // Filter trend chart by days
+        async function filterTrend(days) {
+            currentTrendDays = days;
+
+            // Update button active states
+            document.querySelectorAll('#trend-filters .chart-btn').forEach(btn => {
+                btn.classList.toggle('active', parseInt(btn.dataset.days) === days);
+            });
+
+            // Fetch filtered data
+            try {
+                const response = await fetch(`/api/dashboard/stats?trend_days=${days}`);
+                const data = await response.json();
+
+                if (data.success && data.stats.trend_data) {
+                    updateTrendChart(data.stats.trend_data, days);
+                }
+            } catch (error) {
+                console.error('Failed to filter trend:', error);
+            }
+        }
+
+        // Update trend chart with data
+        function updateTrendChart(trendData, days) {
+            if (!trendData || trendData.length === 0) {
+                // Set default empty data
+                trendChart.data.labels = ['No data'];
+                trendChart.data.datasets[0].data = [0];
+                trendChart.data.datasets[1].data = [0];
+                trendChart.data.datasets[2].data = [0];
+                trendChart.update();
+                return;
+            }
+
+            // Group by date and sentiment
+            const dateMap = {};
+            trendData.forEach(item => {
+                const date = item.date;
+                if (!dateMap[date]) {
+                    dateMap[date] = { Positive: 0, Neutral: 0, Negative: 0 };
+                }
+                if (item.dominant_sentiment) {
+                    dateMap[date][item.dominant_sentiment] = (dateMap[date][item.dominant_sentiment] || 0) + item.count;
+                }
+            });
+
+            // Sort dates and get labels
+            const sortedDates = Object.keys(dateMap).sort();
+            const labels = sortedDates.map(d => {
+                const date = new Date(d);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            });
+
+            // Calculate percentages for each date
+            const positiveData = sortedDates.map(d => {
+                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
+                return total ? Math.round((dateMap[d].Positive / total) * 100) : 0;
+            });
+            const neutralData = sortedDates.map(d => {
+                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
+                return total ? Math.round((dateMap[d].Neutral / total) * 100) : 0;
+            });
+            const negativeData = sortedDates.map(d => {
+                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
+                return total ? Math.round((dateMap[d].Negative / total) * 100) : 0;
+            });
+
+            trendChart.data.labels = labels.length ? labels : ['No data'];
+            trendChart.data.datasets[0].data = positiveData.length ? positiveData : [0];
+            trendChart.data.datasets[1].data = neutralData.length ? neutralData : [0];
+            trendChart.data.datasets[2].data = negativeData.length ? negativeData : [0];
+            trendChart.update();
         }
 
         // Initialize on page load

@@ -213,6 +213,76 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        .btn-classify {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-classify:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        .btn-classify:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .topic-results {
+            margin-top: 1rem;
+        }
+
+        .topic-bar-container {
+            margin-bottom: 0.75rem;
+        }
+
+        .topic-bar-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+        }
+
+        .topic-label {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .topic-percent {
+            color: var(--text-muted);
+        }
+
+        .topic-bar {
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .topic-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
+        .topic-stats {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 1.5rem;
+        }
     </style>
 </head>
 
@@ -291,6 +361,21 @@
                 </div>
             </div>
 
+            <!-- Topic Classification -->
+            <div class="chart-card" style="margin-bottom: 2rem;">
+                <div class="section-title" style="justify-content: space-between;">
+                    <span>📚 Topic Classification</span>
+                    <button id="classify-btn" class="btn-classify" onclick="classifyTopics()">
+                        🔍 Classify Topics
+                    </button>
+                </div>
+                <div id="topic-results" class="topic-results">
+                    <div class="empty-state" style="padding: 1.5rem;">
+                        Click "Classify Topics" to analyze the interview transcript.
+                    </div>
+                </div>
+            </div>
+
             <!-- Transcript with Analysis -->
             <div class="transcript-section">
                 <h3 class="section-title">📝 Full Transcript with Analysis</h3>
@@ -302,8 +387,8 @@
     </div>
 
     <script>
-        Chart.defaults.color = '#94a3b8';
-        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.08)';
+        Chart.defaults.color = '#475569';
+        Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.08)';
 
         const interviewId = {{ interview_id }};
 
@@ -318,6 +403,11 @@
                     displayTranscript(data.transcript);
                     displayAnalysis(data.analysis);
                     displaySummary(data.summary);
+
+                    // Load saved topic classification if exists
+                    if (data.topic_classification) {
+                        displayTopicResults(data.topic_classification);
+                    }
                 } else {
                     document.querySelector('.details-main').innerHTML = `
                         <div class="empty-state">
@@ -456,12 +546,90 @@
                     scales: {
                         r: {
                             beginAtZero: true,
-                            grid: { color: 'rgba(255, 255, 255, 0.08)' }
+                            grid: { color: 'rgba(0, 0, 0, 0.08)' }
                         }
                     },
                     plugins: { legend: { display: false } }
                 }
             });
+        }
+
+        // Topic colors for progress bars
+        const topicColors = {
+            'Academics': '#6366f1',
+            'Career': '#8b5cf6',
+            'Faculty': '#a855f7',
+            'Infrastructure': '#d946ef',
+            'Mental health': '#ec4899',
+            'Social': '#f43f5e',
+            'Technology': '#f97316'
+        };
+
+        // Classify interview topics
+        async function classifyTopics() {
+            const btn = document.getElementById('classify-btn');
+            const resultsDiv = document.getElementById('topic-results');
+
+            // Show loading state
+            btn.disabled = true;
+            btn.textContent = '⏳ Analyzing...';
+            resultsDiv.innerHTML = '<div class="empty-state" style="padding: 1.5rem;">Analyzing transcript. This may take a moment...</div>';
+
+            try {
+                const response = await fetch(`/api/interview/${interviewId}/classify-topics`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    displayTopicResults(data);
+                } else {
+                    resultsDiv.innerHTML = `<div class="empty-state" style="padding: 1.5rem; color: var(--danger);">❌ ${data.error}</div>`;
+                }
+            } catch (error) {
+                console.error('Topic classification failed:', error);
+                resultsDiv.innerHTML = '<div class="empty-state" style="padding: 1.5rem; color: var(--danger);">❌ Failed to classify topics</div>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Classify Topics';
+            }
+        }
+
+        function displayTopicResults(data) {
+            const resultsDiv = document.getElementById('topic-results');
+            const topics = data.topics || {};
+
+            // Sort topics by percentage (descending)
+            const sortedTopics = Object.entries(topics).sort((a, b) => b[1] - a[1]);
+
+            let html = '';
+
+            for (const [topic, percent] of sortedTopics) {
+                const color = topicColors[topic] || '#6366f1';
+                html += `
+                    <div class="topic-bar-container">
+                        <div class="topic-bar-header">
+                            <span class="topic-label">${topic}</span>
+                            <span class="topic-percent">${percent}%</span>
+                        </div>
+                        <div class="topic-bar">
+                            <div class="topic-bar-fill" style="width: ${percent}%; background: ${color};"></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Add stats
+            html += `
+                <div class="topic-stats">
+                    <span>📝 Total sentences: ${data.total_sentences || 0}</span>
+                    <span>✅ Classified: ${data.classified_sentences || 0}</span>
+                </div>
+            `;
+
+            resultsDiv.innerHTML = html;
         }
 
         // Load on page ready

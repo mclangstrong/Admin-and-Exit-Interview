@@ -853,8 +853,12 @@ function endInterview() {
             localStream.getTracks().forEach(track => track.stop());
         }
 
-        // Redirect to dashboard
-        window.location.href = '/dashboard';
+        // Redirect based on role (interviewer -> dashboard, student -> home)
+        if (USER_ROLE === 'interviewer') {
+            window.location.href = '/dashboard';
+        } else {
+            window.location.href = '/home';
+        }
     }
 }
 
@@ -933,7 +937,7 @@ function setupEventListeners() {
                 interview_type: document.getElementById('interview-type').value,
                 program: document.getElementById('program').value,
                 cohort: document.getElementById('cohort').value,
-                student_name: document.getElementById('student-name').value
+                student_name: document.getElementById('student-name-field').value
             };
 
             try {
@@ -1110,5 +1114,38 @@ function fillFormWithStudentData(data) {
     if (studentNameField && data.name) {
         studentNameField.value = data.name;
         console.log('✅ Socket Auto-filled Student Name:', data.name);
+    }
+
+    // Auto-save to backend immediately
+    autoSaveStudentData(data);
+}
+
+async function autoSaveStudentData(data) {
+    if (!data) return;
+
+    const metadata = {
+        interview_type: document.getElementById('interview-type')?.value || 'admission',
+        program: data.course || '',
+        cohort: data.cohort || '',
+        student_name: data.name || ''
+    };
+
+    console.log('💾 Auto-saving student data to backend:', metadata);
+
+    try {
+        const response = await fetch(`/api/room/${ROOM_ID}/metadata`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(metadata)
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            console.log('✅ Student data auto-saved successfully');
+        } else {
+            console.error('❌ Failed to auto-save student data:', result);
+        }
+    } catch (error) {
+        console.error('❌ Error auto-saving student data:', error);
     }
 }
