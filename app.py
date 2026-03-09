@@ -72,27 +72,11 @@ def allowed_file(filename):
     """Check if file extension is in the allowed list."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# CORS: restrict to configured origins, or auto-detect for LAN access (#7)
-def _build_allowed_origins():
-    """Build CORS origins list including the local network IP for LAN access."""
-    env_origins = os.environ.get('ALLOWED_ORIGINS', '')
-    if env_origins:
-        return env_origins.split(',')
-    # Default: allow localhost + auto-detected network IP
-    import socket
-    origins = ['https://localhost:5000', 'http://localhost:5000']
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        origins.append(f'https://{local_ip}:5000')
-        origins.append(f'http://{local_ip}:5000')
-    except Exception:
-        pass
-    return origins
-
-ALLOWED_ORIGINS = _build_allowed_origins()
+# CORS: allow all origins in development for LAN access (#7)
+# In production, set ALLOWED_ORIGINS env var to restrict
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
+if ALLOWED_ORIGINS != '*':
+    ALLOWED_ORIGINS = ALLOWED_ORIGINS.split(',')
 socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode='threading')
 
 # Ensure directories exist
@@ -611,14 +595,26 @@ def save_transcript_line():
     # Save transcript line
     transcript_id = db.add_transcript_line(interview_id, speaker, text)
     
-    # Queue for background analysis instead of blocking (#13)
-    _analysis_queue.put((interview_id, transcript_id, text))
-    
-    return jsonify({
-        'success': True,
-        'transcript_id': transcript_id,
-        'analysis_status': 'queued'
-    })
+    # Analyze synchronously so the client gets real-time results
+    try:
+        analyzer = get_analyzer()
+        analysis = analyzer.analyze(text)
+        
+        # Save analysis to database
+        db.save_analysis(interview_id, analysis, transcript_id)
+        
+        return jsonify({
+            'success': True,
+            'transcript_id': transcript_id,
+            'analysis': analysis
+        })
+    except Exception as e:
+        return jsonify({
+            'success': True,
+            'transcript_id': transcript_id,
+            'analysis': None,
+            'analysis_error': str(e)
+        })
 
 
 @app.route('/api/analyze', methods=['POST'])
@@ -957,9 +953,9 @@ def get_local_ip():
 if __name__ == '__main__':
     import logging
     
-    # Suppress Flask/Werkzeug default logging (we'll show our own banner)
+    # Show warnings but suppress routine request logs
     log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
+    log.setLevel(logging.WARNING)
     
     # Check if this is a reloader subprocess (avoid duplicate prints)
     is_reloader = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
@@ -968,8 +964,21 @@ if __name__ == '__main__':
     key_file = 'key.pem'
     local_ip = get_local_ip()
     
-    # Only print startup banner on reloader (when server is actually ready)
-    if is_reloader:
+    # Pre-load the analyzer first (so banner prints when server is truly ready)
+    get_analyzer()
+    
+    # Always regenerate SSL certs based on current IP
+    try:
+        generate_ssl_certificate()
+    except Exception as e:
+        print(f"   ⚠️  SSL cert generation failed: {e}")
+        # Remove stale certs so we fall back to HTTP cleanly
+        for f in [cert_file, key_file]:
+            if os.path.exists(f):
+                os.remove(f)
+    
+    # Print startup banner after models are loaded and certs are ready
+    if not is_reloader:
         print("\n" + "═" * 60)
         print("   🎓 AI-DRIVEN INTERVIEW ANALYSIS SYSTEM")
         print("═" * 60)
@@ -993,20 +1002,10 @@ if __name__ == '__main__':
         print("   Press Ctrl+C to stop the server")
         print("═" * 60 + "\n")
     
-    # Pre-load the analyzer (silent)
-    get_analyzer()
-    
-    # Check if SSL certificates exist, generate if not
-    if not os.path.exists(cert_file) or not os.path.exists(key_file):
-        try:
-            generate_ssl_certificate()
-        except Exception:
-            pass  # Will fall back to HTTP
-    
     if os.path.exists(cert_file) and os.path.exists(key_file):
         import ssl
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert_file, key_file)
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, ssl_context=context, log_output=False, allow_unsafe_werkzeug=True)
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, ssl_context=context, allow_unsafe_werkzeug=True)
     else:
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, log_output=False, allow_unsafe_werkzeug=True)
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

@@ -274,7 +274,9 @@ class InterviewAnalyzer:
                 self.sentiment_model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
                 self.sentiment_model.to(self.device)
                 self.sentiment_model.eval()
+                print("✅ Sentiment model loaded from HuggingFace directory")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
+                # Try loading the full pickled model first
                 try:
                     torch.serialization.add_safe_globals([BertForSequenceClassification])
                     self.sentiment_model = torch.load(
@@ -282,13 +284,44 @@ class InterviewAnalyzer:
                         map_location=self.device,
                         weights_only=False
                     )
-                except AttributeError:
-                    self.sentiment_model = torch.load(SENTIMENT_SINGLE_FILE, map_location=self.device)
-                
-                self.sentiment_model.eval()
-                self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-        except Exception:
-            pass  # Sentiment will return Unknown
+                    self.sentiment_model.eval()
+                    self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+                    print("✅ Sentiment model loaded from .pth (full pickle)")
+                except (AttributeError, Exception) as e:
+                    # Version mismatch (e.g., BertSdpaSelfAttention not found)
+                    # Create a fresh model and load just the state_dict
+                    print(f"⚠️ Full pickle load failed ({e}), trying state_dict approach...")
+                    try:
+                        # Create a fresh model with 3 labels (Positive, Neutral, Negative)
+                        model = BertForSequenceClassification.from_pretrained(
+                            "bert-base-multilingual-cased",
+                            num_labels=3
+                        )
+                        # Try to extract state_dict from the checkpoint
+                        checkpoint = torch.load(
+                            SENTIMENT_SINGLE_FILE,
+                            map_location=self.device,
+                            weights_only=True
+                        )
+                        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                            model.load_state_dict(checkpoint['state_dict'])
+                        elif isinstance(checkpoint, dict):
+                            model.load_state_dict(checkpoint)
+                        
+                        model.to(self.device)
+                        model.eval()
+                        self.sentiment_model = model
+                        self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+                        print("✅ Sentiment model loaded from .pth (state_dict)")
+                    except Exception as e2:
+                        print(f"⚠️ State dict load also failed: {e2}")
+                        print("   Sentiment analysis will return 'Unknown'")
+            else:
+                print(f"⚠️ No sentiment model found at {SENTIMENT_MODEL_PATH} or {SENTIMENT_SINGLE_FILE}")
+        except Exception as e:
+            import traceback
+            print(f"⚠️ Sentiment model loading failed: {e}")
+            print(f"   Traceback: {traceback.format_exc()}")
     
     def _load_emotion_model(self):
         """Load pre-trained emotion detection model."""

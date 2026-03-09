@@ -1,0 +1,33 @@
+﻿python.exe : 
+Traceback (most 
+recent call last):
+At line:1 char:32
++ ... NG='utf-8'; & 
+"g:\My Drive\Admin-and
+-Exit-Interview\.venv\
+Scripts\pyt ...
++                 ~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (Traceback    
+ (most recent call    
+ last)::String) [    
+], RemoteExceptio    n
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+  File "<string>", 
+line 16, in <module>
+    with open('pth_loa
+d_result.txt', 'w') 
+as f:
+         ~~~~^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^
+PermissionError: 
+[Errno 13] Permission 
+denied: 
+'pth_load_result.txt'
