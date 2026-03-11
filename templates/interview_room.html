@@ -68,7 +68,8 @@
                 </div>
             </div>
 
-            <!-- Sidebar -->
+            <!-- Sidebar (Interviewer Only) -->
+            {% if role == 'interviewer' %}
             <aside class="interview-sidebar">
                 <!-- Metadata Panel -->
                 <div class="sidebar-panel metadata-panel">
@@ -91,7 +92,7 @@
                         </div>
                         <div class="form-group">
                             <label>Student Name</label>
-                            <input type="text" id="student-name" placeholder="Student's full name">
+                            <input type="text" id="student-name-field" placeholder="Student's full name">
                         </div>
                         <button type="submit" class="btn btn-small btn-secondary">Save Details</button>
                     </form>
@@ -105,7 +106,7 @@
                     </div>
                 </div>
 
-                <!-- Analysis Panel -->
+                <!-- Live Analysis Panel -->
                 <div class="sidebar-panel analysis-panel">
                     <h3>🤖 Live Analysis</h3>
                     <div class="analysis-content" id="analysis-content">
@@ -126,6 +127,7 @@
                     </div>
                 </div>
             </aside>
+            {% endif %}
         </main>
 
         <!-- Controls -->
@@ -142,10 +144,12 @@
             </div>
 
             <div class="controls-group center-controls">
+                {% if role == 'interviewer' %}
                 <button class="control-btn record-btn" id="record-btn" onclick="toggleRecording()">
                     <span class="btn-icon">⏺️</span>
                     <span class="btn-label">Start Recording</span>
                 </button>
+                {% endif %}
                 <button class="control-btn end-btn" id="end-btn" onclick="endInterview()">
                     <span class="btn-icon">📞</span>
                     <span class="btn-label">End Interview</span>
@@ -168,6 +172,11 @@
     <!-- Hidden data -->
     <input type="hidden" id="room-id" value="{{ room_id }}">
     <input type="hidden" id="user-role" value="{{ role }}">
+    {% if student_data %}
+    <input type="hidden" id="student-name" value="{{ student_data.name }}">
+    <input type="hidden" id="student-course" value="{{ student_data.course }}">
+    <input type="hidden" id="student-cohort" value="{{ student_data.cohort }}">
+    {% endif %}
 
     <!-- Scripts -->
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>

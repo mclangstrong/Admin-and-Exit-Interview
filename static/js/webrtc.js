@@ -69,6 +69,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('   Use localhost or HTTPS for full functionality.');
     }
 
+    // Verify analysis UI elements exist (interviewer only)
+    console.log('🔍 Checking for analysis UI elements...');
+    console.log('   liveSentiment:', liveSentiment ? '✅ Found' : '❌ Not found');
+    console.log('   liveEmotion:', liveEmotion ? '✅ Found' : '❌ Not found');
+    console.log('   engagementBar:', engagementBar ? '✅ Found' : '❌ Not found');
+    console.log('   transcriptContent:', transcriptContent ? '✅ Found' : '❌ Not found');
+
+    if (!liveSentiment && USER_ROLE === 'interviewer') {
+        console.error('❌ CRITICAL: Analysis elements not found but user is interviewer!');
+        console.log('   This means the HTML template may have an issue.');
+    }
+
     try {
         await initializeMedia();
     } catch (error) {
@@ -81,6 +93,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializeSocket();
     initializeSpeechRecognition();
     setupEventListeners();
+    makeDraggable(localVideo); // Make local video draggable
+    autoFillStudentData(); // Auto-fill interview details if student data available
 });
 
 async function initializeMedia() {
@@ -111,8 +125,8 @@ async function initializeMedia() {
 function initializeSocket() {
     console.log('🔌 Connecting to signaling server...');
 
-    // Connect to server using IP address for network access
-    const serverUrl = 'http://192.168.1.10:5000';
+    // Auto-detect server URL from current page (works with any IP/hostname)
+    const serverUrl = window.location.origin;
     console.log('📡 Server URL:', serverUrl);
 
     socket = io(serverUrl, {
@@ -152,12 +166,28 @@ function initializeSocket() {
         console.log('   Joining socket ID:', data.sid);
         console.log('   Total participants:', data.count);
 
-        // If there are now 2 participants and I am NOT the one who just joined
-        // then I (the first participant) should create the offer
-        if (data.count === 2 && data.sid !== socket.id) {
-            console.log('🔗 I am the first participant - creating offer for newcomer...');
-            await createPeerConnection();
-            await createOffer();
+        // Auto-fill form if user data is provided AND it's a student joining
+        if (data.user_data && data.role === 'student') {
+            console.log('📋 Received user data for auto-fill:', data.user_data);
+            fillFormWithStudentData(data.user_data);
+        }
+
+        // Create peer connection immediately when second participant joins
+        if (data.count === 2) {
+            if (!peerConnection) {
+                console.log('🔗 Creating peer connection...');
+                await createPeerConnection();
+            }
+
+            // If I am NOT the one who just joined, I should create the offer
+            if (data.sid !== socket.id) {
+                console.log('📤 I am the first participant - creating offer for newcomer...');
+                // Small delay to ensure both sides have added tracks
+                await new Promise(resolve => setTimeout(resolve, 500));
+                await createOffer();
+            } else {
+                console.log('📥 I am the second participant - waiting for offer...');
+            }
         }
     });
 
@@ -171,7 +201,13 @@ function initializeSocket() {
 
     socket.on('offer', async (data) => {
         console.log('📨 Received offer');
-        await createPeerConnection();
+
+        // Create peer connection if it doesn't exist yet
+        if (!peerConnection) {
+            console.log('🔗 Creating peer connection for offer...');
+            await createPeerConnection();
+        }
+
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
         await createAnswer();
     });
@@ -190,6 +226,18 @@ function initializeSocket() {
 
     socket.on('interview-started', (data) => {
         console.log('🎬 Interview started:', data);
+
+        // Start speech recognition if we're the student
+        if (USER_ROLE === 'student' && speechRecognition && !isRecording) {
+            console.log('🎤 Starting speech recognition (triggered by interview start)...');
+            isRecording = true; // Mark as recording so speech recognition knows to run
+            try {
+                speechRecognition.start();
+                console.log('✅ Speech recognition started successfully');
+            } catch (error) {
+                console.error('❌ Failed to start speech recognition:', error);
+            }
+        }
     });
 
     socket.on('interview-ended', (data) => {
@@ -220,6 +268,59 @@ function initializeSocket() {
         alert('The interview has ended. Redirecting to home page...');
         window.location.href = '/home';
     });
+
+    socket.on('transcript-line', (data) => {
+        console.log('📝 Received transcript line:', data);
+
+        // Only add if it's from another participant (avoid duplicates)
+        if (data.speaker !== USER_ROLE) {
+            const placeholder = transcriptContent?.querySelector('.transcript-placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+
+            const lineEl = document.createElement('div');
+            lineEl.className = 'transcript-line';
+            lineEl.innerHTML = `
+                <div class="transcript-speaker">${data.speaker === 'interviewer' ? '👔 Interviewer' : '🎓 Student'}</div>
+                <div class="transcript-text">${data.text}</div>
+            `;
+            transcriptContent?.appendChild(lineEl);
+            if (transcriptContent) {
+                transcriptContent.scrollTop = transcriptContent.scrollHeight;
+            }
+        }
+    });
+
+    socket.on('analysis-update', (data) => {
+        console.log('📊 Received analysis update:', data);
+
+        // Only update if it's from another participant (student → interviewer)
+        if (data.speaker !== USER_ROLE) {
+            const sentimentEl = document.getElementById('live-sentiment');
+            const emotionEl = document.getElementById('live-emotion');
+            const engagementEl = document.getElementById('engagement-bar');
+
+            if (sentimentEl && data.analysis.sentiment) {
+                console.log('💭 Updating interviewer sentiment to:', data.analysis.sentiment);
+                sentimentEl.textContent = data.analysis.sentiment;
+                sentimentEl.className = 'analysis-value ' + (data.analysis.sentiment.toLowerCase());
+            }
+
+            if (emotionEl && data.analysis.emotion) {
+                console.log('😊 Updating interviewer emotion to:', data.analysis.emotion);
+                emotionEl.textContent = data.analysis.emotion;
+            }
+
+            if (engagementEl && data.analysis.engagement !== undefined) {
+                const barWidth = `${data.analysis.engagement * 10}%`;
+                console.log('📈 Updating interviewer engagement to:', barWidth);
+                engagementEl.style.width = barWidth;
+            }
+
+            console.log('✅ Interviewer UI updated with student analysis');
+        }
+    });
 }
 
 // ============================================================================
@@ -231,24 +332,35 @@ async function createPeerConnection() {
 
     peerConnection = new RTCPeerConnection(ICE_SERVERS);
 
-    // Add local tracks
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
+    // Add local tracks (only if we have local stream)
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            const sender = peerConnection.addTrack(track, localStream);
+            console.log(`➕ Added ${track.kind} track:`, track.id);
+        });
+        console.log('✅ Added local tracks to peer connection');
+    } else {
+        console.warn('⚠️ No local stream - receive-only mode (can see remote video but not send)');
+    }
 
     // Handle remote stream
     peerConnection.ontrack = (event) => {
-        console.log('📹 Received remote track');
-        remoteStream = event.streams[0];
-        remoteVideo.srcObject = remoteStream;
-        remotePlaceholder.style.display = 'none';
-        document.getElementById('remote-name').textContent =
-            USER_ROLE === 'interviewer' ? 'Student' : 'Interviewer';
+        console.log('📹 Received remote track:', event.track.kind);
+        if (!remoteStream) {
+            remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            remotePlaceholder.style.display = 'none';
+            document.getElementById('remote-name').textContent =
+                USER_ROLE === 'interviewer' ? 'Student' : 'Interviewer';
+        }
+        remoteStream.addTrack(event.track);
+        console.log('✅ Remote track added to stream');
     };
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
+            console.log('🧊 Sending ICE candidate');
             socket.emit('ice-candidate', {
                 room_id: ROOM_ID,
                 candidate: event.candidate
@@ -258,16 +370,23 @@ async function createPeerConnection() {
 
     // Connection state changes
     peerConnection.onconnectionstatechange = () => {
-        console.log('Connection state:', peerConnection.connectionState);
+        console.log('🔌 Connection state:', peerConnection.connectionState);
         switch (peerConnection.connectionState) {
             case 'connected':
                 updateConnectionStatus('connected', 'Connected');
+                console.log('✅ Peer connection established!');
                 break;
             case 'disconnected':
             case 'failed':
                 updateConnectionStatus('disconnected', 'Connection Lost');
+                console.log('❌ Peer connection failed');
                 break;
         }
+    };
+
+    // ICE connection state
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log('🧊 ICE connection state:', peerConnection.iceConnectionState);
     };
 }
 
@@ -314,28 +433,34 @@ async function startRecording() {
     const audioContext = new AudioContext();
     const destination = audioContext.createMediaStreamDestination();
 
-    // Add local audio
-    if (localStream) {
+    // Add local audio (only if available)
+    if (localStream && localStream.getAudioTracks().length > 0) {
         const localSource = audioContext.createMediaStreamSource(
             new MediaStream(localStream.getAudioTracks())
         );
         localSource.connect(destination);
     }
 
-    // Add remote audio
-    if (remoteStream) {
+    // Add remote audio (only if available)
+    if (remoteStream && remoteStream.getAudioTracks().length > 0) {
         const remoteSource = audioContext.createMediaStreamSource(
             new MediaStream(remoteStream.getAudioTracks())
         );
         remoteSource.connect(destination);
     }
 
-    // Create combined stream with video
+    // Create combined stream with video (if available)
     const videoTrack = localStream?.getVideoTracks()[0];
     const combinedStream = new MediaStream([
         ...destination.stream.getAudioTracks(),
         ...(videoTrack ? [videoTrack] : [])
     ]);
+
+    // Check if we have any tracks to record
+    if (combinedStream.getTracks().length === 0) {
+        alert('No audio or video available to record. Please allow camera/microphone access.');
+        return;
+    }
 
     mediaRecorder = new MediaRecorder(combinedStream, {
         mimeType: 'video/webm;codecs=vp9,opus'
@@ -362,7 +487,15 @@ async function startRecording() {
 
     // Start speech recognition
     if (speechRecognition) {
-        speechRecognition.start();
+        console.log('🎤 Starting speech recognition...');
+        try {
+            speechRecognition.start();
+            console.log('✅ Speech recognition started successfully');
+        } catch (error) {
+            console.error('❌ Failed to start speech recognition:', error);
+        }
+    } else {
+        console.warn('⚠️ Speech recognition not available');
     }
 
     // Notify server
@@ -443,74 +576,133 @@ function initializeSpeechRecognition() {
         return;
     }
 
+    console.log('🎤 Checking for Web Speech API support...');
+
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        console.warn('Speech recognition not supported');
+        console.error('❌ Speech recognition not supported in this browser');
+        console.log('   Please use Chrome or Edge for speech recognition');
         return;
     }
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    speechRecognition = new SpeechRecognition();
+    try {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        console.log('✅ SpeechRecognition API found:', SpeechRecognition);
 
-    speechRecognition.continuous = true;
-    speechRecognition.interimResults = true;
-    speechRecognition.lang = 'en-US'; // Will also pick up Tagalog reasonably
+        speechRecognition = new SpeechRecognition();
+        console.log('✅ SpeechRecognition instance created:', speechRecognition);
 
-    speechRecognition.onresult = (event) => {
-        const results = event.results;
-        const lastResult = results[results.length - 1];
+        speechRecognition.continuous = true;
+        speechRecognition.interimResults = true;
+        speechRecognition.lang = 'en-US'; // Will also pick up Tagalog reasonably
 
-        if (lastResult.isFinal) {
-            const text = lastResult[0].transcript;
-            addTranscriptLine('student', text);
-            analyzeTranscriptLine(text);
-        }
-    };
+        speechRecognition.onresult = (event) => {
+            const results = event.results;
+            const lastResult = results[results.length - 1];
 
-    speechRecognition.onerror = (event) => {
-        console.warn('Speech recognition error:', event.error);
-        if (event.error !== 'no-speech') {
-            // Restart on recoverable errors
-            setTimeout(() => {
-                if (isRecording && speechRecognition) {
-                    speechRecognition.start();
+            console.log('🎤 Speech detected:', lastResult[0].transcript, 'Final:', lastResult.isFinal);
+
+            if (lastResult.isFinal) {
+                const text = lastResult[0].transcript.trim();
+                console.log('✅ Final transcript:', text);
+
+                // Only process if there's actual text (not empty or whitespace)
+                if (text.length > 0) {
+                    addTranscriptLine('student', text);
+                    analyzeTranscriptLine(text);
+                } else {
+                    console.log('⚠️ Skipping empty transcript');
                 }
-            }, 1000);
-        }
-    };
+            }
+        };
 
-    speechRecognition.onend = () => {
-        // Auto-restart if still recording
-        if (isRecording) {
-            speechRecognition.start();
-        }
-    };
+        speechRecognition.onerror = (event) => {
+            console.error('❌ Speech recognition error:', event.error, event);
+            if (event.error !== 'no-speech') {
+                // Restart on recoverable errors
+                setTimeout(() => {
+                    if (isRecording && speechRecognition) {
+                        console.log('🔄 Restarting speech recognition after error...');
+                        try {
+                            speechRecognition.start();
+                        } catch (e) {
+                            console.error('❌ Failed to restart:', e);
+                        }
+                    }
+                }, 1000);
+            }
+        };
 
-    console.log('🎤 Speech recognition initialized (Student only)');
+        speechRecognition.onend = () => {
+            console.log('🛑 Speech recognition ended');
+            // Auto-restart if still recording
+            if (isRecording) {
+                console.log('🔄 Auto-restarting speech recognition...');
+                try {
+                    speechRecognition.start();
+                } catch (e) {
+                    console.error('❌ Failed to auto-restart:', e);
+                }
+            }
+        };
+
+        speechRecognition.onstart = () => {
+            console.log('▶️ Speech recognition started and listening...');
+        };
+
+        console.log('🎤 Speech recognition initialized successfully (Student only)');
+    } catch (error) {
+        console.error('❌ Failed to initialize speech recognition:', error);
+        speechRecognition = null;
+    }
 }
 
 function addTranscriptLine(speaker, text) {
     const line = { speaker, text, timestamp: new Date().toISOString() };
     transcript.push(line);
 
-    // Update UI
-    const placeholder = transcriptContent.querySelector('.transcript-placeholder');
-    if (placeholder) {
-        placeholder.remove();
+    // Update UI (only if transcript panel exists - interviewer has it, student doesn't)
+    if (transcriptContent) {
+        const placeholder = transcriptContent.querySelector('.transcript-placeholder');
+        if (placeholder) {
+            placeholder.remove();
+        }
+
+        const lineEl = document.createElement('div');
+        lineEl.className = 'transcript-line';
+        lineEl.innerHTML = `
+            <div class="transcript-speaker">${speaker === 'interviewer' ? '👔 Interviewer' : '🎓 Student'}</div>
+            <div class="transcript-text">${text}</div>
+        `;
+        transcriptContent.appendChild(lineEl);
+        transcriptContent.scrollTop = transcriptContent.scrollHeight;
     }
 
-    const lineEl = document.createElement('div');
-    lineEl.className = 'transcript-line';
-    lineEl.innerHTML = `
-        <div class="transcript-speaker">${speaker === 'interviewer' ? '👔 Interviewer' : '🎓 Student'}</div>
-        <div class="transcript-text">${text}</div>
-    `;
-    transcriptContent.appendChild(lineEl);
-    transcriptContent.scrollTop = transcriptContent.scrollHeight;
+    // Broadcast to other participants in the room (always send, even if no local UI)
+    console.log('📤 Broadcasting transcript to room:', text);
+    socket.emit('transcript-line', {
+        room_id: ROOM_ID,
+        speaker: speaker,
+        text: text,
+        timestamp: line.timestamp
+    });
 }
 
 async function analyzeTranscriptLine(text) {
+    console.log('🔍 analyzeTranscriptLine called with text:', text);
+
+    // Re-check elements exist (get fresh references each time)
+    const sentimentEl = document.getElementById('live-sentiment');
+    const emotionEl = document.getElementById('live-emotion');
+    const engagementEl = document.getElementById('engagement-bar');
+
+    console.log('🔍 Element check:');
+    console.log('   sentimentEl:', sentimentEl ? '✅' : '❌');
+    console.log('   emotionEl:', emotionEl ? '✅' : '❌');
+    console.log('   engagementEl:', engagementEl ? '✅' : '❌');
+
     try {
         // Save transcript line to database AND analyze with trained model
+        console.log('📤 Sending POST to /api/transcript...');
         const response = await fetch('/api/transcript', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -521,31 +713,87 @@ async function analyzeTranscriptLine(text) {
             })
         });
 
+        console.log('📥 Response status:', response.status);
         const result = await response.json();
+        console.log('📊 Full API response:', result);
 
         if (result.success && result.analysis) {
             const analysis = result.analysis;
+            console.log('✅ Analysis data received:', analysis);
 
-            // Update sentiment display
-            liveSentiment.textContent = analysis.sentiment?.label || '--';
-            liveSentiment.className = 'analysis-value ' + (analysis.sentiment?.label?.toLowerCase() || '');
+            // Update sentiment display using fresh element reference
+            if (sentimentEl) {
+                const sentimentLabel = analysis.sentiment?.label || '--';
+                console.log('💭 Updating sentiment to:', sentimentLabel);
+                sentimentEl.textContent = sentimentLabel;
+                sentimentEl.className = 'analysis-value ' + (sentimentLabel.toLowerCase());
+                console.log('   ✅ Sentiment element updated');
+            } else {
+                console.warn('⚠️ sentimentEl not found - user may not be interviewer');
+            }
 
             // Update emotion display
-            if (analysis.emotions) {
+            if (emotionEl && analysis.emotions) {
                 const topEmotion = Object.entries(analysis.emotions)
                     .sort((a, b) => b[1] - a[1])[0];
-                liveEmotion.textContent = topEmotion ? topEmotion[0] : '--';
+                const emotionLabel = topEmotion ? topEmotion[0] : '--';
+                console.log('😊 Updating emotion to:', emotionLabel);
+                emotionEl.textContent = emotionLabel;
+                console.log('   ✅ Emotion element updated');
+            } else {
+                console.warn('⚠️ emotionEl not found or no emotions in analysis');
             }
 
             // Update engagement bar
-            if (analysis.engagement) {
-                engagementBar.style.width = `${analysis.engagement.score * 10}%`;
+            if (engagementEl && analysis.engagement) {
+                const engagementScore = analysis.engagement.score;
+                const barWidth = `${engagementScore * 10}%`;
+                console.log('📈 Updating engagement bar to:', barWidth, '(score:', engagementScore, ')');
+                engagementEl.style.width = barWidth;
+                console.log('   ✅ Engagement bar updated');
+            } else {
+                console.warn('⚠️ engagementEl not found or no engagement in analysis');
             }
+
+            console.log('✅ UI update complete');
+
+            // Broadcast analysis to other participants (interviewer)
+            console.log('📡 Broadcasting analysis to room...');
+            console.log('🔍 DEBUG: Full analysis object:', analysis);
+            console.log('🔍 DEBUG: analysis.emotions:', analysis.emotions);
+            console.log('🔍 DEBUG: typeof analysis.emotions:', typeof analysis.emotions);
+            console.log('🔍 DEBUG: Object.keys(analysis.emotions):', analysis.emotions ? Object.keys(analysis.emotions) : 'null');
+
+            // Extract top emotion from analysis data (not from DOM element)
+            let topEmotion = '--';
+            if (analysis.emotions && Object.keys(analysis.emotions).length > 0) {
+                const emotionEntries = Object.entries(analysis.emotions).sort((a, b) => b[1] - a[1]);
+                console.log('🔍 DEBUG: emotionEntries:', emotionEntries);
+                topEmotion = emotionEntries[0]?.[0] || '--';
+                console.log('🔍 DEBUG: topEmotion extracted:', topEmotion);
+            } else {
+                console.warn('⚠️ DEBUG: No emotions found or empty object');
+            }
+
+            socket.emit('analysis-update', {
+                room_id: ROOM_ID,
+                speaker: USER_ROLE,
+                analysis: {
+                    sentiment: analysis.sentiment?.label || '--',
+                    emotion: topEmotion,
+                    engagement: analysis.engagement?.score || 0
+                }
+            });
+            console.log('   ✅ Analysis broadcast sent with emotion:', topEmotion);
+        } else {
+            console.error('❌ No analysis in response or success=false:', result);
         }
     } catch (error) {
-        console.warn('Analysis failed:', error);
+        console.error('❌ Analysis failed with error:', error);
+        console.error('Error stack:', error.stack);
     }
 }
+
 
 // ============================================================================
 // Controls
@@ -605,8 +853,12 @@ function endInterview() {
             localStream.getTracks().forEach(track => track.stop());
         }
 
-        // Redirect to dashboard
-        window.location.href = '/dashboard';
+        // Redirect based on role (interviewer -> dashboard, student -> home)
+        if (USER_ROLE === 'interviewer') {
+            window.location.href = '/dashboard';
+        } else {
+            window.location.href = '/home';
+        }
     }
 }
 
@@ -632,10 +884,15 @@ function updateRecordingUI(recording) {
     }
 }
 
+
 function updateConnectionStatus(status, text) {
-    const indicator = connectionStatus.querySelector('.status-indicator');
-    indicator.className = 'status-indicator ' + status;
-    connectionStatus.childNodes[1].textContent = ' ' + text;
+    if (!connectionStatus) return;
+
+    // Simply rebuild the entire content to avoid text duplication
+    connectionStatus.innerHTML = `
+        <span class="status-indicator ${status}"></span>
+        ${text}
+    `;
 }
 
 function startTimer() {
@@ -680,7 +937,7 @@ function setupEventListeners() {
                 interview_type: document.getElementById('interview-type').value,
                 program: document.getElementById('program').value,
                 cohort: document.getElementById('cohort').value,
-                student_name: document.getElementById('student-name').value
+                student_name: document.getElementById('student-name-field').value
             };
 
             try {
@@ -707,4 +964,188 @@ function setupEventListeners() {
             e.returnValue = 'Recording is in progress. Are you sure you want to leave?';
         }
     });
+}
+
+// ============================================================================
+// Draggable Functionality
+// ============================================================================
+
+function makeDraggable(element) {
+    if (!element) return;
+
+    let isDragging = false;
+    let currentX;
+    let currentY;
+    let initialX;
+    let initialY;
+    let xOffset = 0;
+    let yOffset = 0;
+
+    // Get the parent element (video-wrapper)
+    const container = element.parentElement;
+    if (!container) return;
+
+    // Add cursor style
+    container.style.cursor = 'move';
+
+    container.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    function dragStart(e) {
+        // Only drag if clicking on the video container, not controls
+        if (e.target === container || e.target === element) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+            isDragging = true;
+            container.style.cursor = 'grabbing';
+        }
+    }
+
+    function drag(e) {
+        if (isDragging) {
+            e.preventDefault();
+
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+
+            xOffset = currentX;
+            yOffset = currentY;
+
+            // Get viewport dimensions
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const rect = container.getBoundingClientRect();
+
+            // Constrain to viewport boundaries
+            let newLeft = currentX;
+            let newTop = currentY;
+
+            // Keep within horizontal bounds
+            if (newLeft < 0) newLeft = 0;
+            if (newLeft + rect.width > viewportWidth) {
+                newLeft = viewportWidth - rect.width;
+            }
+
+            // Keep within vertical bounds
+            if (newTop < 0) newTop = 0;
+            if (newTop + rect.height > viewportHeight) {
+                newTop = viewportHeight - rect.height;
+            }
+
+            setTranslate(newLeft, newTop, container);
+        }
+    }
+
+    function dragEnd(e) {
+        if (isDragging) {
+            initialX = currentX;
+            initialY = currentY;
+            isDragging = false;
+            container.style.cursor = 'move';
+        }
+    }
+
+    function setTranslate(xPos, yPos, el) {
+        el.style.left = xPos + 'px';
+        el.style.top = yPos + 'px';
+    }
+}
+
+// ============================================================================
+// Auto-Fill Student Data
+// ============================================================================
+
+function autoFillStudentData() {
+    // Only auto-fill if student data is available (hidden inputs exist)
+    const studentName = document.getElementById('student-name');
+    const studentCourse = document.getElementById('student-course');
+    const studentCohort = document.getElementById('student-cohort');
+
+    if (!studentName || !studentCourse || !studentCohort) {
+        console.log('ℹ️  No student data available for auto-fill');
+        return;
+    }
+
+    // Get the form fields
+    const programField = document.getElementById('program');
+    const cohortField = document.getElementById('cohort');
+    const studentNameField = document.getElementById('student-name-field');
+
+    if (programField && studentCourse.value) {
+        programField.value = studentCourse.value;
+        console.log('✅ Auto-filled Program:', studentCourse.value);
+    }
+
+    if (cohortField && studentCohort.value) {
+        cohortField.value = studentCohort.value;
+        console.log('✅ Auto-filled Cohort:', studentCohort.value);
+    }
+
+    if (studentNameField && studentName.value) {
+        studentNameField.value = studentName.value;
+        console.log('✅ Auto-filled Student Name:', studentName.value);
+    }
+
+    console.log('✅ Interview details auto-filled from student data');
+}
+
+function fillFormWithStudentData(data) {
+    if (!data) return;
+
+    // Get the form fields
+    const programField = document.getElementById('program');
+    const cohortField = document.getElementById('cohort');
+    const studentNameField = document.getElementById('student-name-field');
+
+    // Only fill if the field exists and is empty (or force update? Requirement implies auto-fill)
+    // I'll overwrite to ensure data is correct as per 'automatically filled by getting the data of the student who joined'
+
+    if (programField && data.course) {
+        programField.value = data.course;
+        console.log('✅ Socket Auto-filled Program:', data.course);
+    }
+
+    if (cohortField && data.cohort) {
+        cohortField.value = data.cohort;
+        console.log('✅ Socket Auto-filled Cohort:', data.cohort);
+    }
+
+    if (studentNameField && data.name) {
+        studentNameField.value = data.name;
+        console.log('✅ Socket Auto-filled Student Name:', data.name);
+    }
+
+    // Auto-save to backend immediately
+    autoSaveStudentData(data);
+}
+
+async function autoSaveStudentData(data) {
+    if (!data) return;
+
+    const metadata = {
+        interview_type: document.getElementById('interview-type')?.value || 'admission',
+        program: data.course || '',
+        cohort: data.cohort || '',
+        student_name: data.name || ''
+    };
+
+    console.log('💾 Auto-saving student data to backend:', metadata);
+
+    try {
+        const response = await fetch(`/api/room/${ROOM_ID}/metadata`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(metadata)
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            console.log('✅ Student data auto-saved successfully');
+        } else {
+            console.error('❌ Failed to auto-save student data:', result);
+        }
+    } catch (error) {
+        console.error('❌ Error auto-saving student data:', error);
+    }
 }

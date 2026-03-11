@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment
+.env
+
+# SSL certificates (auto-generated)
+cert.pem
+key.pem
+
+# Database (runtime data)
+interviews.db
+interviews.db-shm
+interviews.db-wal
+
+# Recordings (runtime data)
+recordings/
+transcripts/
+
+# ML model weights (too large for git)
+taglish_sentiment_model_full.pth
+model/*.safetensors
+model/*.pt
+model/*.pth
+model/*.bin
+
+# IDE
+.vscode/
+.idea/

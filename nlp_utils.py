@@ -21,8 +21,8 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 # Paths to models
-SENTIMENT_MODEL_PATH = "./taglish_mbert_model_final"
-SENTIMENT_SINGLE_FILE = "./taglish_sentiment_model_full.pth"
+SENTIMENT_MODEL_PATH = "./model"  # Uses existing trained model
+SENTIMENT_SINGLE_FILE = "./model/taglish_sentiment_model_full.pth"
 
 # Emotion model from Hugging Face
 EMOTION_MODEL_NAME = "bhadresh-savani/distilbert-base-uncased-emotion"
@@ -245,7 +245,6 @@ class InterviewAnalyzer:
             load_keyphrase: Whether to load KeyBERT for key phrases
         """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"⚙️  Device: {self.device}")
         
         self.sentiment_model = None
         self.sentiment_tokenizer = None
@@ -260,8 +259,6 @@ class InterviewAnalyzer:
         
         if load_keyphrase:
             self._load_keyphrase_model()
-        
-        print("✅ InterviewAnalyzer ready!")
     
     # ------------------------------------------------------------------------
     # MODEL LOADING
@@ -269,7 +266,6 @@ class InterviewAnalyzer:
     
     def _load_sentiment_model(self):
         """Load the trained Taglish sentiment model."""
-        print("📥 Loading Sentiment Model...")
         try:
             from transformers import BertTokenizer, BertForSequenceClassification
             
@@ -278,22 +274,57 @@ class InterviewAnalyzer:
                 self.sentiment_model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
                 self.sentiment_model.to(self.device)
                 self.sentiment_model.eval()
-                print("   ✓ Sentiment model loaded from folder")
+                print("✅ Sentiment model loaded from HuggingFace directory")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
-                # Load from single .pth file
-                self.sentiment_model = torch.load(SENTIMENT_SINGLE_FILE, map_location=self.device)
-                self.sentiment_model.eval()
-                # Still need tokenizer from HuggingFace
-                self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-                print("   ✓ Sentiment model loaded from .pth file")
+                # Try loading the full pickled model first
+                try:
+                    torch.serialization.add_safe_globals([BertForSequenceClassification])
+                    self.sentiment_model = torch.load(
+                        SENTIMENT_SINGLE_FILE, 
+                        map_location=self.device,
+                        weights_only=False
+                    )
+                    self.sentiment_model.eval()
+                    self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+                    print("✅ Sentiment model loaded from .pth (full pickle)")
+                except (AttributeError, Exception) as e:
+                    # Version mismatch (e.g., BertSdpaSelfAttention not found)
+                    # Create a fresh model and load just the state_dict
+                    print(f"⚠️ Full pickle load failed ({e}), trying state_dict approach...")
+                    try:
+                        # Create a fresh model with 3 labels (Positive, Neutral, Negative)
+                        model = BertForSequenceClassification.from_pretrained(
+                            "bert-base-multilingual-cased",
+                            num_labels=3
+                        )
+                        # Try to extract state_dict from the checkpoint
+                        checkpoint = torch.load(
+                            SENTIMENT_SINGLE_FILE,
+                            map_location=self.device,
+                            weights_only=True
+                        )
+                        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                            model.load_state_dict(checkpoint['state_dict'])
+                        elif isinstance(checkpoint, dict):
+                            model.load_state_dict(checkpoint)
+                        
+                        model.to(self.device)
+                        model.eval()
+                        self.sentiment_model = model
+                        self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+                        print("✅ Sentiment model loaded from .pth (state_dict)")
+                    except Exception as e2:
+                        print(f"⚠️ State dict load also failed: {e2}")
+                        print("   Sentiment analysis will return 'Unknown'")
             else:
-                print("   ⚠️ Sentiment model not found. Train the model first.")
+                print(f"⚠️ No sentiment model found at {SENTIMENT_MODEL_PATH} or {SENTIMENT_SINGLE_FILE}")
         except Exception as e:
-            print(f"   ❌ Error loading sentiment model: {e}")
+            import traceback
+            print(f"⚠️ Sentiment model loading failed: {e}")
+            print(f"   Traceback: {traceback.format_exc()}")
     
     def _load_emotion_model(self):
         """Load pre-trained emotion detection model."""
-        print("📥 Loading Emotion Model...")
         try:
             from transformers import pipeline
             self.emotion_pipeline = pipeline(
@@ -302,19 +333,16 @@ class InterviewAnalyzer:
                 top_k=None,
                 device=0 if self.device == "cuda" else -1
             )
-            print("   ✓ Emotion model loaded")
-        except Exception as e:
-            print(f"   ❌ Error loading emotion model: {e}")
+        except Exception:
+            pass  # Will use keyword-based fallback
     
     def _load_keyphrase_model(self):
         """Load KeyBERT for key phrase extraction."""
-        print("📥 Loading KeyBERT...")
         try:
             from keybert import KeyBERT
             self.keyphrase_model = KeyBERT("paraphrase-multilingual-MiniLM-L12-v2")
-            print("   ✓ KeyBERT loaded")
-        except Exception as e:
-            print(f"   ❌ Error loading KeyBERT: {e}")
+        except Exception:
+            pass  # Key phrase extraction will be disabled
     
     # ------------------------------------------------------------------------
     # ANALYSIS METHODS
@@ -384,8 +412,11 @@ class InterviewAnalyzer:
                 }
             }
         except Exception as e:
+            import traceback
             print(f"⚠️ Sentiment analysis error: {e}")
+            print(f"   Traceback: {traceback.format_exc()}")
             return {"label": "Error", "confidence": 0.0, "probabilities": {}}
+
     
     def analyze_emotion(self, text: str) -> Dict[str, float]:
         """
@@ -395,14 +426,57 @@ class InterviewAnalyzer:
             Dict mapping emotion names to scores (0-1)
         """
         if self.emotion_pipeline is None:
-            return {}
+            # Fallback to simple keyword-based emotion detection
+            return self._analyze_emotion_fallback(text)
         
         try:
             results = self.emotion_pipeline(text)[0]
             return {item['label']: round(item['score'], 4) for item in results}
         except Exception as e:
             print(f"⚠️ Emotion analysis error: {e}")
-            return {}
+            # Use fallback on error
+            return self._analyze_emotion_fallback(text)
+    
+    def _analyze_emotion_fallback(self, text: str) -> Dict[str, float]:
+        """
+        Simple keyword-based emotion detection as fallback.
+        Returns scores for 6 emotions: joy, sadness, anger, fear, love, surprise
+        """
+        text_lower = text.lower()
+        
+        # Emotion keywords (English and Tagalog)
+        emotion_keywords = {
+            'joy': ['happy', 'excited', 'great', 'amazing', 'wonderful', 'love', 'enjoy',
+                    'masaya', 'saya', 'tuwa', 'galak'],
+            'sadness': ['sad', 'unhappy', 'disappointed', 'down', 'depressed', 'upset',
+                       'malungkot', 'lungkot', 'dismaya'],
+            'anger': ['angry', 'mad', 'furious', 'annoyed', 'frustrated', 'irritated',
+                     'galit', 'inis', 'badtrip'],
+            'fear': ['afraid', 'scared', 'worried', 'anxious', 'nervous', 'concerned',
+                    'takot', 'kaba', 'nerbyos'],
+            'love': ['love', 'adore', 'care', 'appreciate', 'grateful', 'thankful',
+                    'mahal', 'pagmamahal'],
+            'surprise': ['surprised', 'shocked', 'amazed', 'unexpected', 'wow',
+                        'gulat', 'biglaan']
+        }
+        
+        # Count keyword matches
+        scores = {}
+        total_matches = 0
+        
+        for emotion, keywords in emotion_keywords.items():
+            matches = sum(1 for keyword in keywords if keyword in text_lower)
+            scores[emotion] = matches
+            total_matches += matches
+        
+        # Normalize scores (0-1 range)
+        if total_matches > 0:
+            scores = {k: round(v / total_matches, 4) for k, v in scores.items()}
+        else:
+            # No keywords found - return neutral distribution
+            scores = {k: round(1/6, 4) for k in emotion_keywords.keys()}
+        
+        return scores
     
     def calculate_engagement(self, text: str, sentiment_result: Dict = None, 
                               keyphrases: List[Dict] = None) -> Dict[str, Any]:
@@ -485,7 +559,6 @@ class InterviewAnalyzer:
         Returns:
             Dict containing all analysis results
         """
-        print(f"\n🔍 Analyzing: \"{text[:50]}...\"" if len(text) > 50 else f"\n🔍 Analyzing: \"{text}\"")
         
         # Run all analyses
         keyphrases = self.extract_keyphrases(text)

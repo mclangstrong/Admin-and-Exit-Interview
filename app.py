@@ -1,3 +1,18 @@
+import os
+import sys
+
+# Suppress TensorFlow and other warnings before any imports
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN warnings
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+
+import warnings
+warnings.filterwarnings('ignore')
+
+import logging
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('transformers').setLevel(logging.ERROR)
+
 """
 AI-Driven Interview Analysis System
 ====================================
@@ -14,11 +29,17 @@ Main Flask application with:
 import os
 import json
 import uuid
+import tempfile
+from threading import Thread
+from queue import Queue
 from functools import wraps
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for, flash
 
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # Import database module
 import database as db
@@ -31,9 +52,32 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'interview-system-secret-key-change-in-production'
 app.config['UPLOAD_FOLDER'] = 'recordings'
 app.config['TRANSCRIPT_FOLDER'] = 'transcripts'
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max upload (#10)
 
-# Initialize SocketIO for WebRTC signaling (using threading for Windows compatibility)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# CSRF protection (#4)
+csrf = CSRFProtect(app)
+
+# Rate limiting (#6)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
+# Allowed file extensions for upload validation (#10)
+ALLOWED_EXTENSIONS = {'webm', 'wav', 'mp3', 'ogg', 'mp4'}
+
+def allowed_file(filename):
+    """Check if file extension is in the allowed list."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# CORS: allow all origins in development for LAN access (#7)
+# In production, set ALLOWED_ORIGINS env var to restrict
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
+if ALLOWED_ORIGINS != '*':
+    ALLOWED_ORIGINS = ALLOWED_ORIGINS.split(',')
+socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode='threading')
 
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -42,6 +86,27 @@ os.makedirs(app.config['TRANSCRIPT_FOLDER'], exist_ok=True)
 # In-memory storage for active rooms (maps room_id to interview_id)
 active_rooms = {}
 
+
+def _restore_active_rooms():
+    """Restore in-progress rooms from database on startup (#11)."""
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM interviews WHERE status = 'in-progress'")
+        for row in cursor.fetchall():
+            active_rooms[row['room_id']] = {
+                'interview_id': row['id'],
+                'created_at': row['created_at'],
+                'participants': [],
+                'metadata': {},
+                'status': row['status']
+            }
+        conn.close()
+    except Exception:
+        pass  # Database may not be initialized yet
+
+_restore_active_rooms()
+
 # Global analyzer instance (loaded once for performance)
 _analyzer = None
 
@@ -49,15 +114,32 @@ def get_analyzer():
     """Get or create the NLP analyzer (uses trained mBERT model)."""
     global _analyzer
     if _analyzer is None:
-        print("🤖 Loading trained mBERT model...")
         from nlp_utils import InterviewAnalyzer
         _analyzer = InterviewAnalyzer(
-            load_sentiment=True,   # Load trained sentiment model
-            load_emotion=True,     # Load emotion model
-            load_keyphrase=True    # Load KeyBERT
+            load_sentiment=True,
+            load_emotion=True,
+            load_keyphrase=True
         )
-        print("✅ NLP analyzer ready with trained model!")
     return _analyzer
+
+
+# Background analysis worker (#13)
+_analysis_queue = Queue()
+
+def _analysis_worker():
+    """Background thread that processes NLP analysis without blocking requests."""
+    while True:
+        interview_id, transcript_id, text = _analysis_queue.get()
+        try:
+            analyzer = get_analyzer()
+            analysis = analyzer.analyze(text)
+            db.save_analysis(interview_id, analysis, transcript_id)
+        except Exception as e:
+            print(f"Background analysis error: {e}")
+        _analysis_queue.task_done()
+
+_worker_thread = Thread(target=_analysis_worker, daemon=True)
+_worker_thread.start()
 
 
 # ============================================================================
@@ -101,6 +183,7 @@ def user_required(f):
 # ============================================================================
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def login():
     """Login page."""
     if request.method == 'POST':
@@ -135,6 +218,7 @@ def register():
         confirm_password = request.form.get('confirm_password')
         full_name = request.form.get('full_name')
         email = request.form.get('email', '')
+        course = request.form.get('course', '')
         
         if password != confirm_password:
             return render_template('register.html', error='Passwords do not match')
@@ -142,7 +226,10 @@ def register():
         if len(password) < 6:
             return render_template('register.html', error='Password must be at least 6 characters')
         
-        user_id = db.create_user(username, password, role='user', full_name=full_name, email=email)
+        if not course:
+            return render_template('register.html', error='Please select a course')
+        
+        user_id = db.create_user(username, password, role='user', full_name=full_name, email=email, course=course)
         
         if user_id:
             return redirect(url_for('login', success='Account created! Please sign in.'))
@@ -220,7 +307,19 @@ def join_interview(room_id):
         else:
             return render_template('error.html', message='Interview room not found.'), 404
     
-    return render_template('interview_room.html', room_id=room_id, role='student')
+    # Get student data from session for auto-fill
+    student_data = None
+    if 'user_id' in session:
+        user_id = session['user_id']
+        user = db.get_user_by_id(user_id)
+        if user:
+            student_data = {
+                'name': user.get('full_name', ''),
+                'course': user.get('course', ''),
+                'cohort': datetime.now().strftime('%d/%m/%Y')  # Today's date in dd/mm/yyyy
+            }
+    
+    return render_template('interview_room.html', room_id=room_id, role='student', student_data=student_data)
 
 
 @app.route('/dashboard')
@@ -236,9 +335,13 @@ def dashboard():
 
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
-    """Get dashboard statistics from database."""
+    """Get dashboard statistics from database with optional filters."""
     try:
-        stats = db.get_dashboard_stats()
+        # Get filter parameters
+        sentiment_filter = request.args.get('sentiment_filter', 'all')  # 'all' or 'month'
+        trend_days = request.args.get('trend_days', 30, type=int)  # 7, 30, or 90
+        
+        stats = db.get_dashboard_stats(sentiment_filter=sentiment_filter, trend_days=trend_days)
         return jsonify({'success': True, 'stats': stats})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -309,16 +412,35 @@ def get_full_interview_details(interview_id):
             # Find matching analysis
             if i < len(analysis):
                 item['sentiment'] = analysis[i].get('sentiment_label')
-                item['emotion'] = analysis[i].get('audio_emotion') or 'neutral'
+                # Extract dominant emotion from emotions_json (text-based emotion)
+                emotions_json = analysis[i].get('emotions_json')
+                if emotions_json:
+                    try:
+                        import json
+                        emotions = json.loads(emotions_json)
+                        if emotions:
+                            # Get the emotion with highest score
+                            dominant_emotion = max(emotions.items(), key=lambda x: x[1])[0]
+                            item['emotion'] = dominant_emotion
+                        else:
+                            item['emotion'] = 'neutral'
+                    except:
+                        item['emotion'] = analysis[i].get('audio_emotion') or 'neutral'
+                else:
+                    item['emotion'] = analysis[i].get('audio_emotion') or 'neutral'
                 item['engagement'] = analysis[i].get('engagement_score')
             transcript.append(item)
+        
+        # Get saved topic classification if exists
+        topic_classification = db.get_topic_classification(interview_id)
         
         return jsonify({
             'success': True,
             'interview': interview,
             'transcript': transcript,
             'analysis': analysis,
-            'summary': summary
+            'summary': summary,
+            'topic_classification': topic_classification
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -331,11 +453,60 @@ def view_interview_details(interview_id):
     return render_template('interview_details.html', interview_id=interview_id)
 
 
+@app.route('/api/interview/<int:interview_id>/classify-topics', methods=['POST'])
+@csrf.exempt
+@admin_required
+def classify_interview_topics(interview_id):
+    """Classify interview transcript into topics."""
+    try:
+        # Import the topic classifier
+        import topic_classifier
+        
+        # Get transcript for this interview
+        transcript = db.get_transcript(interview_id)
+        
+        if not transcript:
+            return jsonify({
+                'success': False,
+                'error': 'No transcript found for this interview'
+            })
+        
+        # Extract text from transcript
+        transcript_texts = [t['text'] for t in transcript if t.get('text')]
+        
+        if not transcript_texts:
+            return jsonify({
+                'success': False,
+                'error': 'Transcript is empty'
+            })
+        
+        # Run topic classification
+        result = topic_classifier.classify_transcript(transcript_texts)
+        
+        # Save results to database for dashboard aggregation
+        if result.get('success'):
+            db.save_topic_classification(
+                interview_id,
+                result.get('topics', {}),
+                result.get('total_sentences', 0),
+                result.get('classified_sentences', 0)
+            )
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 # ============================================================================
 # ROUTES - API (Interview Operations)
 # ============================================================================
 
 @app.route('/api/rooms', methods=['GET'])
+@csrf.exempt
 def get_rooms():
     """Get list of active rooms."""
     return jsonify({
@@ -347,6 +518,7 @@ def get_rooms():
 
 
 @app.route('/api/room/<room_id>/metadata', methods=['POST'])
+@csrf.exempt
 def set_room_metadata(room_id):
     """Set interview metadata (program, cohort, date, etc.)."""
     if room_id not in active_rooms:
@@ -370,12 +542,19 @@ def set_room_metadata(room_id):
 
 
 @app.route('/api/upload-recording', methods=['POST'])
+@csrf.exempt
+@limiter.limit("5 per minute")
 def upload_recording():
     """Upload recorded audio/video from interview."""
     if 'audio' not in request.files:
         return jsonify({'error': 'No audio file provided'}), 400
     
     audio_file = request.files['audio']
+    
+    # Validate file type (#10)
+    if audio_file.filename and not allowed_file(audio_file.filename):
+        return jsonify({'error': 'File type not allowed'}), 400
+    
     room_id = request.form.get('room_id', 'unknown')
     channel = request.form.get('channel', 'mixed')
     
@@ -389,16 +568,17 @@ def upload_recording():
     # Update database with recording path
     db.update_interview(room_id, recording_path=filepath)
     
+    # Don't expose filesystem path in response (#8)
     return jsonify({
         'success': True,
-        'filename': filename,
-        'path': filepath
+        'filename': filename
     })
 
 
 @app.route('/api/transcript', methods=['POST'])
+@csrf.exempt
 def save_transcript_line():
-    """Save a transcript line and analyze it."""
+    """Save a transcript line and queue it for background analysis (#13)."""
     data = request.json
     room_id = data.get('room_id')
     speaker = data.get('speaker', 'student')
@@ -415,7 +595,7 @@ def save_transcript_line():
     # Save transcript line
     transcript_id = db.add_transcript_line(interview_id, speaker, text)
     
-    # Analyze with trained model
+    # Analyze synchronously so the client gets real-time results
     try:
         analyzer = get_analyzer()
         analysis = analyzer.analyze(text)
@@ -433,11 +613,12 @@ def save_transcript_line():
             'success': True,
             'transcript_id': transcript_id,
             'analysis': None,
-            'error': str(e)
+            'analysis_error': str(e)
         })
 
 
 @app.route('/api/analyze', methods=['POST'])
+@csrf.exempt
 def analyze_interview():
     """Analyze interview transcript with NLP pipeline (uses trained mBERT model)."""
     data = request.json
@@ -463,6 +644,7 @@ def analyze_interview():
 
 
 @app.route('/api/analyze-topics', methods=['POST'])
+@csrf.exempt
 def analyze_topics():
     """Extract topics from transcript."""
     data = request.json
@@ -488,6 +670,7 @@ def analyze_topics():
 
 
 @app.route('/api/analyze-emotion', methods=['POST'])
+@csrf.exempt
 def analyze_emotion():
     """Analyze emotion from audio file."""
     if 'audio' not in request.files:
@@ -496,8 +679,9 @@ def analyze_emotion():
     audio_file = request.files['audio']
     room_id = request.form.get('room_id')
     
-    # Save temporarily
-    temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_emotion.wav')
+    # Use unique temp file to avoid race condition (#9)
+    temp_fd, temp_path = tempfile.mkstemp(suffix='.wav', dir=app.config['UPLOAD_FOLDER'])
+    os.close(temp_fd)
     audio_file.save(temp_path)
     
     try:
@@ -519,6 +703,7 @@ def analyze_emotion():
 
 
 @app.route('/api/interview/<room_id>/complete', methods=['POST'])
+@csrf.exempt
 def complete_interview(room_id):
     """Mark interview as complete and calculate summary."""
     if room_id not in active_rooms:
@@ -545,15 +730,12 @@ def complete_interview(room_id):
 @socketio.on('connect')
 def handle_connect():
     """Handle new WebSocket connection."""
-    print("="*60)
-    print(f"🟢 CLIENT CONNECTED: {request.sid}")
-    print("="*60)
+    pass  # Connection handled silently
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle WebSocket disconnection."""
-    print(f"Client disconnected: {request.sid}")
     for room_id, room_data in active_rooms.items():
         if request.sid in room_data['participants']:
             room_data['participants'].remove(request.sid)
@@ -566,8 +748,6 @@ def handle_join_room(data):
     room_id = data.get('room_id')
     role = data.get('role', 'student')
     
-    print(f"🔌 join-room request: room={room_id}, role={role}, sid={request.sid}")
-    
     # If room not in active_rooms, try to load from database
     if room_id not in active_rooms:
         interview = db.get_interview(room_id)
@@ -579,9 +759,7 @@ def handle_join_room(data):
                 'metadata': {},
                 'status': interview['status'] or 'waiting'
             }
-            print(f"📦 Loaded room {room_id} from database")
         else:
-            print(f"❌ Room {room_id} not found in database")
             emit('error', {'message': 'Room not found'})
             return
     
@@ -593,13 +771,24 @@ def handle_join_room(data):
         active_rooms[room_id]['participants'].append(request.sid)
     
     participant_count = len(active_rooms[room_id]['participants'])
-    print(f"✅ User {request.sid} joined room {room_id} as {role} (total: {participant_count})")
     
+    # Get user details for auto-fill if authenticated
+    user_data = {}
+    if 'user_id' in session:
+        user = db.get_user_by_id(session['user_id'])
+        if user:
+            user_data = {
+                'name': user.get('full_name', ''),
+                'course': user.get('course', ''),
+                'cohort': datetime.now().strftime('%d/%m/%Y')
+            }
+
     # Notify all participants in the room
     emit('participant-joined', {
         'sid': request.sid,
         'role': role,
-        'count': participant_count
+        'count': participant_count,
+        'user_data': user_data
     }, room=room_id)
 
 
@@ -619,32 +808,26 @@ def handle_leave_room(data):
 def handle_offer(data):
     """Forward WebRTC offer to target peer."""
     room_id = data.get('room_id')
-    print(f"📩 OFFER received from {request.sid} for room {room_id}")
-    print(f"   Participants in room: {active_rooms.get(room_id, {}).get('participants', [])}")
     emit('offer', {
         'sdp': data.get('sdp'),
         'from': request.sid
     }, room=room_id, include_self=False)
-    print(f"   OFFER broadcast to room {room_id}")
 
 
 @socketio.on('answer')
 def handle_answer(data):
     """Forward WebRTC answer to target peer."""
     room_id = data.get('room_id')
-    print(f"📩 ANSWER received from {request.sid} for room {room_id}")
     emit('answer', {
         'sdp': data.get('sdp'),
         'from': request.sid
     }, room=room_id, include_self=False)
-    print(f"   ANSWER broadcast to room {room_id}")
 
 
 @socketio.on('ice-candidate')
 def handle_ice_candidate(data):
     """Forward ICE candidate to target peer."""
     room_id = data.get('room_id')
-    print(f"🧊 ICE candidate from {request.sid} for room {room_id}")
     emit('ice-candidate', {
         'candidate': data.get('candidate'),
         'from': request.sid
@@ -683,21 +866,146 @@ def handle_interview_ended(data):
     emit('interview-ended', {'timestamp': datetime.now().isoformat()}, room=room_id)
 
 
+@socketio.on('transcript-line')
+def handle_transcript_line(data):
+    """Broadcast transcript line to all participants in the room."""
+    room_id = data.get('room_id')
+    emit('transcript-line', data, room=room_id)
+
+
+@socketio.on('analysis-update')
+def handle_analysis_update(data):
+    """Broadcast live analysis data to all participants in the room."""
+    room_id = data.get('room_id')
+    emit('analysis-update', data, room=room_id)
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
 
-if __name__ == '__main__':
-    print("=" * 60)
-    print("   AI-DRIVEN INTERVIEW ANALYSIS SYSTEM")
-    print("=" * 60)
-    print("🌐 Starting server on http://localhost:5000")
-    print("📹 Video conferencing ready")
-    print("🤖 NLP analysis pipeline with trained mBERT model")
-    print("💾 SQLite database connected")
-    print("=" * 60)
+def generate_ssl_certificate():
+    """Generate self-signed SSL certificate if it doesn't exist."""
+    import socket
+    from OpenSSL import crypto
     
-    # Pre-load the analyzer
+    # Get local IP address
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    
+    # Create a key pair
+    key = crypto.PKey()
+    key.generate_key(crypto.TYPE_RSA, 2048)
+    
+    # Create a self-signed cert
+    cert = crypto.X509()
+    cert.get_subject().C = "PH"
+    cert.get_subject().ST = "Metro Manila"
+    cert.get_subject().L = "Manila"
+    cert.get_subject().O = "InterviewAI"
+    cert.get_subject().OU = "Development"
+    cert.get_subject().CN = local_ip
+    
+    # Add Subject Alternative Names (SANs)
+    san_list = [
+        f"DNS:localhost",
+        f"DNS:{hostname}",
+        f"IP:127.0.0.1",
+        f"IP:{local_ip}"
+    ]
+    san_extension = crypto.X509Extension(
+        b"subjectAltName",
+        False,
+        ", ".join(san_list).encode()
+    )
+    cert.add_extensions([san_extension])
+    
+    cert.set_serial_number(1000)
+    cert.gmtime_adj_notBefore(0)
+    cert.gmtime_adj_notAfter(365*24*60*60)  # Valid for 1 year
+    cert.set_issuer(cert.get_subject())
+    cert.set_pubkey(key)
+    cert.sign(key, 'sha256')
+    
+    # Save certificate and key
+    with open("cert.pem", "wb") as f:
+        f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
+    
+    with open("key.pem", "wb") as f:
+        f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, key))
+    
+    return True
+
+
+def get_local_ip():
+    """Get the local network IP address."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
+
+if __name__ == '__main__':
+    import logging
+    
+    # Show warnings but suppress routine request logs
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.WARNING)
+    
+    # Check if this is a reloader subprocess (avoid duplicate prints)
+    is_reloader = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    
+    cert_file = 'cert.pem'
+    key_file = 'key.pem'
+    local_ip = get_local_ip()
+    
+    # Pre-load the analyzer first (so banner prints when server is truly ready)
     get_analyzer()
     
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Always regenerate SSL certs based on current IP
+    try:
+        generate_ssl_certificate()
+    except Exception as e:
+        print(f"   ⚠️  SSL cert generation failed: {e}")
+        # Remove stale certs so we fall back to HTTP cleanly
+        for f in [cert_file, key_file]:
+            if os.path.exists(f):
+                os.remove(f)
+    
+    # Print startup banner after models are loaded and certs are ready
+    if not is_reloader:
+        print("\n" + "═" * 60)
+        print("   🎓 AI-DRIVEN INTERVIEW ANALYSIS SYSTEM")
+        print("═" * 60)
+        
+        if os.path.exists(cert_file) and os.path.exists(key_file):
+            print(f"   � HTTPS Mode")
+            print(f"   🌐 https://localhost:5000")
+            if local_ip != '127.0.0.1':
+                print(f"   🌐 https://{local_ip}:5000  (network)")
+        else:
+            print(f"   ⚠️  HTTP Mode")
+            print(f"   🌐 http://localhost:5000")
+            if local_ip != '127.0.0.1':
+                print(f"   🌐 http://{local_ip}:5000  (network)")
+        
+        print("─" * 60)
+        print("   📹 Video conferencing: Ready")
+        print("   🤖 NLP analysis: mBERT model loaded")
+        print("   💾 Database: SQLite connected")
+        print("═" * 60)
+        print("   Press Ctrl+C to stop the server")
+        print("═" * 60 + "\n")
+    
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, ssl_context=context, allow_unsafe_werkzeug=True)
+    else:
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

@@ -10,17 +10,29 @@ Handles SQLite database operations for storing:
 import os
 import sqlite3
 import json
+import secrets
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Database path
 DB_PATH = "interviews.db"
 
 
+# Allowed columns for dynamic UPDATE queries (Warning #5)
+ALLOWED_UPDATE_COLUMNS = frozenset([
+    'student_name', 'interviewer_name', 'program', 'cohort',
+    'interview_type', 'status', 'started_at', 'ended_at',
+    'duration_seconds', 'recording_path'
+])
+
+
 def get_connection():
-    """Get database connection."""
+    """Get database connection with WAL mode and busy timeout."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -102,6 +114,25 @@ def init_database():
         )
     ''')
     
+    # Topic classifications table (for dashboard aggregation)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS topic_classifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            interview_id INTEGER UNIQUE NOT NULL,
+            academics_percent REAL DEFAULT 0,
+            career_percent REAL DEFAULT 0,
+            faculty_percent REAL DEFAULT 0,
+            infrastructure_percent REAL DEFAULT 0,
+            mental_health_percent REAL DEFAULT 0,
+            social_percent REAL DEFAULT 0,
+            technology_percent REAL DEFAULT 0,
+            total_sentences INTEGER DEFAULT 0,
+            classified_sentences INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (interview_id) REFERENCES interviews(id)
+        )
+    ''')
+    
     # Users table for authentication
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -111,25 +142,30 @@ def init_database():
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             full_name TEXT,
+            course TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login TIMESTAMP
         )
     ''')
     
-    # Create default admin if not exists
+    # Create default admin if not exists (Warning #3: random password)
     cursor.execute('SELECT COUNT(*) as count FROM users WHERE role = "admin"')
     if cursor.fetchone()['count'] == 0:
-        import hashlib
-        default_password = hashlib.sha256('admin123'.encode()).hexdigest()
+        random_password = secrets.token_urlsafe(16)
+        default_password = generate_password_hash(random_password)
         cursor.execute('''
             INSERT INTO users (username, password_hash, role, full_name)
             VALUES (?, ?, ?, ?)
         ''', ('admin', default_password, 'admin', 'System Administrator'))
-        print("   Created default admin user (username: admin, password: admin123)")
+        print(f"\n{'=' * 60}")
+        print(f"  ⚠️  DEFAULT ADMIN CREATED")
+        print(f"  Username: admin")
+        print(f"  Password: {random_password}")
+        print(f"  CHANGE THIS PASSWORD IMMEDIATELY!")
+        print(f"{'=' * 60}\n")
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized")
 
 
 # ============================================================================
@@ -137,20 +173,18 @@ def init_database():
 # ============================================================================
 
 def create_user(username: str, password: str, role: str = 'user', 
-                full_name: str = '', email: str = '') -> Optional[int]:
+                full_name: str = '', email: str = '', course: str = '') -> Optional[int]:
     """Create a new user."""
-    import hashlib
-    
     conn = get_connection()
     cursor = conn.cursor()
     
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    password_hash = generate_password_hash(password)
     
     try:
         cursor.execute('''
-            INSERT INTO users (username, password_hash, role, full_name, email)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (username, password_hash, role, full_name, email))
+            INSERT INTO users (username, password_hash, role, full_name, email, course)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (username, password_hash, role, full_name, email, course))
         
         user_id = cursor.lastrowid
         conn.commit()
@@ -163,30 +197,27 @@ def create_user(username: str, password: str, role: str = 'user',
 
 def verify_user(username: str, password: str) -> Optional[Dict]:
     """Verify user credentials and return user data."""
-    import hashlib
-    from datetime import datetime
-    
     conn = get_connection()
     cursor = conn.cursor()
     
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    
     cursor.execute('''
-        SELECT id, username, role, full_name, email 
+        SELECT id, username, role, full_name, email, password_hash
         FROM users 
-        WHERE username = ? AND password_hash = ?
-    ''', (username, password_hash))
+        WHERE username = ?
+    ''', (username,))
     
     row = cursor.fetchone()
     
-    if row:
+    if row and check_password_hash(row['password_hash'], password):
         # Update last login
         cursor.execute('''
             UPDATE users SET last_login = ? WHERE id = ?
         ''', (datetime.now().isoformat(), row['id']))
         conn.commit()
         conn.close()
-        return dict(row)
+        user_data = dict(row)
+        del user_data['password_hash']  # Don't leak hash
+        return user_data
     
     conn.close()
     return None
@@ -198,7 +229,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT id, username, role, full_name, email, created_at, last_login
+        SELECT id, username, role, full_name, email, course, created_at, last_login
         FROM users WHERE id = ?
     ''', (user_id,))
     
@@ -290,9 +321,7 @@ def update_interview(room_id: str, **kwargs) -> bool:
     updates = []
     values = []
     for key, value in kwargs.items():
-        if key in ['student_name', 'interviewer_name', 'program', 'cohort', 
-                   'interview_type', 'status', 'started_at', 'ended_at', 
-                   'duration_seconds', 'recording_path']:
+        if key in ALLOWED_UPDATE_COLUMNS:
             updates.append(f"{key} = ?")
             values.append(value)
     
@@ -556,30 +585,75 @@ def calculate_interview_summary(interview_id: int) -> Dict:
     }
 
 
-def get_dashboard_stats() -> Dict:
-    """Get statistics for dashboard."""
+def get_dashboard_stats(sentiment_filter: str = 'all', trend_days: int = 30) -> Dict:
+    """Get statistics for dashboard with optional filters."""
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # Calculate date filters
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    trend_start = (now - timedelta(days=trend_days)).strftime('%Y-%m-%d')
     
     # Total interviews
     cursor.execute('SELECT COUNT(*) as count FROM interviews')
     total_interviews = cursor.fetchone()['count']
     
-    # Sentiment distribution
-    cursor.execute('''
-        SELECT dominant_sentiment, COUNT(*) as count 
-        FROM interview_summary 
-        GROUP BY dominant_sentiment
-    ''')
-    sentiment_dist = {row['dominant_sentiment']: row['count'] for row in cursor.fetchall()}
+    # Sentiment distribution - with optional month filter
+    if sentiment_filter == 'month':
+        # Filter to current month - from interview_summary
+        cursor.execute('''
+            SELECT dominant_sentiment, COUNT(*) as count 
+            FROM interview_summary 
+            WHERE dominant_sentiment IS NOT NULL
+            AND created_at >= ?
+            GROUP BY dominant_sentiment
+        ''', (month_start.isoformat(),))
+        sentiment_dist = {row['dominant_sentiment']: row['count'] for row in cursor.fetchall()}
+        
+        # Fallback to analysis_results
+        if not sentiment_dist:
+            cursor.execute('''
+                SELECT sentiment_label, COUNT(*) as count 
+                FROM analysis_results 
+                WHERE sentiment_label IS NOT NULL
+                AND created_at >= ?
+                GROUP BY sentiment_label
+            ''', (month_start.isoformat(),))
+            sentiment_dist = {row['sentiment_label']: row['count'] for row in cursor.fetchall()}
+    else:
+        # All time - from interview_summary
+        cursor.execute('''
+            SELECT dominant_sentiment, COUNT(*) as count 
+            FROM interview_summary 
+            WHERE dominant_sentiment IS NOT NULL
+            GROUP BY dominant_sentiment
+        ''')
+        sentiment_dist = {row['dominant_sentiment']: row['count'] for row in cursor.fetchall()}
+        
+        # Fallback to analysis_results
+        if not sentiment_dist:
+            cursor.execute('''
+                SELECT sentiment_label, COUNT(*) as count 
+                FROM analysis_results 
+                WHERE sentiment_label IS NOT NULL
+                GROUP BY sentiment_label
+            ''')
+            sentiment_dist = {row['sentiment_label']: row['count'] for row in cursor.fetchall()}
     
     # Calculate percentages
     total_with_sentiment = sum(sentiment_dist.values()) or 1
     positive_rate = round(sentiment_dist.get('Positive', 0) / total_with_sentiment * 100)
     
-    # Average engagement
+    # Average engagement - try interview_summary first, fallback to analysis_results
     cursor.execute('SELECT AVG(avg_engagement_score) as avg FROM interview_summary')
-    avg_engagement = cursor.fetchone()['avg'] or 0
+    avg_engagement = cursor.fetchone()['avg']
+    
+    # Fallback: if no summary data, aggregate from analysis_results
+    if avg_engagement is None:
+        cursor.execute('SELECT AVG(engagement_score) as avg FROM analysis_results WHERE engagement_score IS NOT NULL')
+        avg_engagement = cursor.fetchone()['avg'] or 0
     
     # Unique students
     cursor.execute('SELECT COUNT(DISTINCT student_name) as count FROM interviews WHERE student_name != ""')
@@ -605,15 +679,53 @@ def get_dashboard_stats() -> Dict:
     total_emotion = sum(all_emotions.values()) or 1
     emotion_dist = {k: round(v / total_emotion * 100) for k, v in all_emotions.items()}
     
-    # Recent trend (last 4 weeks approximated)
+    # Trend data - filtered by days (from interview_summary)
     cursor.execute('''
         SELECT date(created_at) as date, dominant_sentiment, COUNT(*) as count
         FROM interview_summary
+        WHERE date(created_at) >= ?
         GROUP BY date(created_at), dominant_sentiment
-        ORDER BY date DESC
-        LIMIT 28
-    ''')
+        ORDER BY date ASC
+    ''', (trend_start,))
     trend_data = cursor.fetchall()
+    
+    # Fallback: if no summary data, use analysis_results
+    if not trend_data:
+        cursor.execute('''
+            SELECT date(created_at) as date, sentiment_label as dominant_sentiment, COUNT(*) as count
+            FROM analysis_results
+            WHERE date(created_at) >= ?
+            AND sentiment_label IS NOT NULL
+            GROUP BY date(created_at), sentiment_label
+            ORDER BY date ASC
+        ''', (trend_start,))
+        trend_data = cursor.fetchall()
+    
+    # Topic distribution from classified interviews
+    cursor.execute('''
+        SELECT 
+            AVG(academics_percent) as academics,
+            AVG(career_percent) as career,
+            AVG(faculty_percent) as faculty,
+            AVG(infrastructure_percent) as infrastructure,
+            AVG(mental_health_percent) as mental_health,
+            AVG(social_percent) as social,
+            AVG(technology_percent) as technology
+        FROM topic_classifications
+    ''')
+    topic_row = cursor.fetchone()
+    
+    topic_dist = {}
+    if topic_row:
+        topic_dist = {
+            'Academics': round(topic_row['academics'] or 0, 1),
+            'Career': round(topic_row['career'] or 0, 1),
+            'Faculty': round(topic_row['faculty'] or 0, 1),
+            'Infrastructure': round(topic_row['infrastructure'] or 0, 1),
+            'Mental health': round(topic_row['mental_health'] or 0, 1),
+            'Social': round(topic_row['social'] or 0, 1),
+            'Technology': round(topic_row['technology'] or 0, 1)
+        }
     
     conn.close()
     
@@ -625,6 +737,7 @@ def get_dashboard_stats() -> Dict:
         'sentiment_distribution': sentiment_dist,
         'type_distribution': type_dist,
         'emotion_distribution': emotion_dist,
+        'topic_distribution': topic_dist,
         'trend_data': [dict(row) for row in trend_data]
     }
 
@@ -649,6 +762,110 @@ def get_recent_interviews(limit: int = 10) -> List[Dict]:
     conn.close()
     
     return [dict(row) for row in rows]
+
+
+# ============================================================================
+# TOPIC CLASSIFICATION
+# ============================================================================
+
+def save_topic_classification(interview_id: int, topics: Dict, total_sentences: int, classified_sentences: int) -> bool:
+    """Save topic classification results for an interview."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO topic_classifications (
+            interview_id, academics_percent, career_percent, faculty_percent,
+            infrastructure_percent, mental_health_percent, social_percent,
+            technology_percent, total_sentences, classified_sentences
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        interview_id,
+        topics.get('Academics', 0),
+        topics.get('Career', 0),
+        topics.get('Faculty', 0),
+        topics.get('Infrastructure', 0),
+        topics.get('Mental health', 0),
+        topics.get('Social', 0),
+        topics.get('Technology', 0),
+        total_sentences,
+        classified_sentences
+    ))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_topic_classification(interview_id: int) -> Optional[Dict]:
+    """Get saved topic classification for a specific interview."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT * FROM topic_classifications WHERE interview_id = ?
+    ''', (interview_id,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            'success': True,
+            'topics': {
+                'Academics': row['academics_percent'],
+                'Career': row['career_percent'],
+                'Faculty': row['faculty_percent'],
+                'Infrastructure': row['infrastructure_percent'],
+                'Mental health': row['mental_health_percent'],
+                'Social': row['social_percent'],
+                'Technology': row['technology_percent']
+            },
+            'total_sentences': row['total_sentences'],
+            'classified_sentences': row['classified_sentences']
+        }
+    
+    return None
+
+
+def get_aggregated_topic_distribution() -> Dict:
+    """Get aggregated topic distribution across all classified interviews."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            AVG(academics_percent) as academics,
+            AVG(career_percent) as career,
+            AVG(faculty_percent) as faculty,
+            AVG(infrastructure_percent) as infrastructure,
+            AVG(mental_health_percent) as mental_health,
+            AVG(social_percent) as social,
+            AVG(technology_percent) as technology,
+            COUNT(*) as total_classified
+        FROM topic_classifications
+    ''')
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row['total_classified'] > 0:
+        return {
+            'Academics': round(row['academics'] or 0, 1),
+            'Career': round(row['career'] or 0, 1),
+            'Faculty': round(row['faculty'] or 0, 1),
+            'Infrastructure': round(row['infrastructure'] or 0, 1),
+            'Mental health': round(row['mental_health'] or 0, 1),
+            'Social': round(row['social'] or 0, 1),
+            'Technology': round(row['technology'] or 0, 1),
+            'total_classified': row['total_classified']
+        }
+    
+    return {
+        'Academics': 0, 'Career': 0, 'Faculty': 0, 'Infrastructure': 0,
+        'Mental health': 0, 'Social': 0, 'Technology': 0,
+        'total_classified': 0
+    }
 
 
 # Initialize on import
