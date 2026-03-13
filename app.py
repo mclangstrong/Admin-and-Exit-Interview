@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Eventlet monkey-patching MUST come before all other imports
+import eventlet
+eventlet.monkey_patch()
+
 # Suppress TensorFlow and other warnings before any imports
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN warnings
@@ -12,6 +16,17 @@ warnings.filterwarnings('ignore')
 import logging
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.getLogger('transformers').setLevel(logging.ERROR)
+logging.getLogger('eventlet.wsgi.server').setLevel(logging.ERROR)
+
+# Suppress SSL handshake errors from self-signed certificates
+import ssl
+_original_ssl_read = ssl.SSLObject.read
+def _quiet_ssl_read(self, *args, **kwargs):
+    try:
+        return _original_ssl_read(self, *args, **kwargs)
+    except ssl.SSLError:
+        raise
+ssl.SSLObject.read = _quiet_ssl_read
 
 """
 AI-Driven Interview Analysis System
@@ -77,7 +92,14 @@ def allowed_file(filename):
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
 if ALLOWED_ORIGINS != '*':
     ALLOWED_ORIGINS = ALLOWED_ORIGINS.split(',')
-socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode='threading')
+# Socket.IO configuration
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    ping_timeout=60,
+    ping_interval=25,
+    async_mode='eventlet'
+)
 
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -967,33 +989,36 @@ if __name__ == '__main__':
     # Pre-load the analyzer first (so banner prints when server is truly ready)
     get_analyzer()
     
-    # Always regenerate SSL certs based on current IP
+    # Always generate SSL certs - HTTPS is required for WebRTC camera access
     try:
         generate_ssl_certificate()
+        print("   🔒 SSL certificates generated successfully")
     except Exception as e:
         print(f"   ⚠️  SSL cert generation failed: {e}")
-        # Remove stale certs so we fall back to HTTP cleanly
-        for f in [cert_file, key_file]:
-            if os.path.exists(f):
-                os.remove(f)
+        print("   🔄 Retrying SSL cert generation...")
+        try:
+            # Delete stale certs and retry
+            for f in [cert_file, key_file]:
+                if os.path.exists(f):
+                    os.remove(f)
+            generate_ssl_certificate()
+            print("   🔒 SSL certificates generated on retry")
+        except Exception as e2:
+            print(f"   ❌ SSL cert generation failed permanently: {e2}")
+            print("   ❌ Cannot start server without HTTPS (required for WebRTC)")
+            print("   💡 Install pyOpenSSL: pip install pyOpenSSL")
+            import sys
+            sys.exit(1)
     
     # Print startup banner after models are loaded and certs are ready
     if not is_reloader:
         print("\n" + "═" * 60)
         print("   🎓 AI-DRIVEN INTERVIEW ANALYSIS SYSTEM")
         print("═" * 60)
-        
-        if os.path.exists(cert_file) and os.path.exists(key_file):
-            print(f"   � HTTPS Mode")
-            print(f"   🌐 https://localhost:5000")
-            if local_ip != '127.0.0.1':
-                print(f"   🌐 https://{local_ip}:5000  (network)")
-        else:
-            print(f"   ⚠️  HTTP Mode")
-            print(f"   🌐 http://localhost:5000")
-            if local_ip != '127.0.0.1':
-                print(f"   🌐 http://{local_ip}:5000  (network)")
-        
+        print(f"   🔒 HTTPS Mode (Required for WebRTC)")
+        print(f"   🌐 https://localhost:5000")
+        if local_ip != '127.0.0.1':
+            print(f"   🌐 https://{local_ip}:5000  (network)")
         print("─" * 60)
         print("   📹 Video conferencing: Ready")
         print("   🤖 NLP analysis: mBERT model loaded")
@@ -1002,10 +1027,5 @@ if __name__ == '__main__':
         print("   Press Ctrl+C to stop the server")
         print("═" * 60 + "\n")
     
-    if os.path.exists(cert_file) and os.path.exists(key_file):
-        import ssl
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cert_file, key_file)
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, ssl_context=context, allow_unsafe_werkzeug=True)
-    else:
-        socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
+    # Always start with HTTPS
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, certfile=cert_file, keyfile=key_file, allow_unsafe_werkzeug=True)

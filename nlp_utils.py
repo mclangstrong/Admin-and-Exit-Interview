@@ -267,18 +267,18 @@ class InterviewAnalyzer:
     def _load_sentiment_model(self):
         """Load the trained Taglish sentiment model."""
         try:
-            from transformers import BertTokenizer, BertForSequenceClassification
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
             
             if os.path.exists(SENTIMENT_MODEL_PATH):
-                self.sentiment_tokenizer = BertTokenizer.from_pretrained(SENTIMENT_MODEL_PATH)
-                self.sentiment_model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
+                self.sentiment_tokenizer = AutoTokenizer.from_pretrained(SENTIMENT_MODEL_PATH)
+                self.sentiment_model = AutoModelForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
                 self.sentiment_model.to(self.device)
                 self.sentiment_model.eval()
                 print("✅ Sentiment model loaded from HuggingFace directory")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
                 # Try loading the full pickled model first
                 try:
-                    torch.serialization.add_safe_globals([BertForSequenceClassification])
+                    torch.serialization.add_safe_globals([AutoModelForSequenceClassification])
                     self.sentiment_model = torch.load(
                         SENTIMENT_SINGLE_FILE, 
                         map_location=self.device,
@@ -293,7 +293,7 @@ class InterviewAnalyzer:
                     print(f"⚠️ Full pickle load failed ({e}), trying state_dict approach...")
                     try:
                         # Create a fresh model with 3 labels (Positive, Neutral, Negative)
-                        model = BertForSequenceClassification.from_pretrained(
+                        model = AutoModelForSequenceClassification.from_pretrained(
                             "bert-base-multilingual-cased",
                             num_labels=3
                         )
@@ -311,7 +311,7 @@ class InterviewAnalyzer:
                         model.to(self.device)
                         model.eval()
                         self.sentiment_model = model
-                        self.sentiment_tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+                        self.sentiment_tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
                         print("✅ Sentiment model loaded from .pth (state_dict)")
                     except Exception as e2:
                         print(f"⚠️ State dict load also failed: {e2}")

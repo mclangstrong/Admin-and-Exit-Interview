@@ -1,31 +1,47 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
+env/
 
 # Environment
 .env
 
-# SSL certificates (auto-generated)
+# SSL certificates (auto-generated per machine/IP)
 cert.pem
 key.pem
 
-# Database (runtime data)
+# Database (runtime data, recreated automatically)
 interviews.db
 interviews.db-shm
 interviews.db-wal
 
-# Recordings (runtime data)
+# Recordings and transcripts (runtime data)
 recordings/
 transcripts/
 
-# ML model weights (too large for git)
+# ML model weights (too large for GitHub, download separately)
 taglish_sentiment_model_full.pth
 model/*.safetensors
 model/*.pt
 model/*.pth
 model/*.bin
 
+# Windows (Google Drive sync creates these everywhere)
+desktop.ini
+Thumbs.db
+ehthumbs.db
+
+# macOS
+.DS_Store
+
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Misc
+*.log
