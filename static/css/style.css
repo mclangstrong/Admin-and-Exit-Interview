@@ -25,7 +25,7 @@
     /* Text Colors */
     --text-primary: #1e293b;
     --text-secondary: #475569;
-    --text-muted: #94a3b8;
+    --text-muted: #64748b;
 
     /* Border & Shadow */
     --border-color: rgba(0, 0, 0, 0.08);
@@ -411,6 +411,85 @@ a:hover {
 }
 
 /* ============================================================================
+   Accessibility
+   ============================================================================ */
+
+/* Better focus visibility for keyboard navigation */
+*:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+}
+
+/* Skip to content link for screen readers */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ============================================================================
+   User Header (Home page)
+   ============================================================================ */
+
+.user-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.user-avatar {
+    font-size: 1.5rem;
+}
+
+.user-name {
+    font-weight: 500;
+}
+
+.user-role {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    border-radius: 100px;
+    font-weight: 600;
+}
+
+.user-role.admin {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--danger);
+}
+
+.user-role.user {
+    background: rgba(99, 102, 241, 0.2);
+    color: var(--accent-primary);
+}
+
+/* ============================================================================
    Responsive
    ============================================================================ */
 
@@ -426,10 +505,40 @@ a:hover {
     .features-grid {
         grid-template-columns: repeat(2, 1fr);
     }
+
+    .user-header {
+        padding: 0.75rem 1rem;
+    }
+
+    .hero {
+        padding: 2.5rem 1.5rem 1.5rem;
+    }
+
+    .actions-section {
+        padding: 1.5rem;
+    }
 }
 
 @media (max-width: 480px) {
     .features-grid {
         grid-template-columns: 1fr;
     }
-}
+
+    .hero-title {
+        font-size: 1.75rem;
+    }
+
+    .hero-subtitle {
+        font-size: 0.95rem;
+    }
+
+    .user-header {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .btn {
+        padding: 0.75rem 1rem;
+        font-size: 0.875rem;
+    }
+}

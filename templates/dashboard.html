@@ -1,335 +1,29 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analytics Dashboard - InterviewAI</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        /* Dashboard-specific styles */
-        .dashboard-container {
-            min-height: 100vh;
-            background: var(--bg-primary);
-        }
+{% block title %}Analytics Dashboard - InterviewAI{% endblock %}
 
-        .dashboard-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 1rem 2rem;
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-color);
-        }
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+{% endblock %}
 
-        .dashboard-nav {
-            display: flex;
-            gap: 1rem;
-        }
-
-        .nav-link {
-            padding: 0.5rem 1rem;
-            color: var(--text-secondary);
-            border-radius: var(--radius-sm);
-            transition: all var(--transition-fast);
-        }
-
-        .nav-link:hover,
-        .nav-link.active {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .dashboard-main {
-            padding: 2rem;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .dashboard-title {
-            margin-bottom: 2rem;
-        }
-
-        .dashboard-title h1 {
-            font-size: 1.75rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .dashboard-title p {
-            color: var(--text-secondary);
-        }
-
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 1.5rem;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            background: var(--accent-gradient);
-        }
-
-        .stat-icon {
-            font-size: 2rem;
-            margin-bottom: 0.75rem;
-        }
-
-        .stat-value {
-            font-size: 2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 0.25rem;
-        }
-
-        .stat-label {
-            font-size: 0.875rem;
-            color: var(--text-muted);
-        }
-
-        .stat-change {
-            font-size: 0.75rem;
-            margin-top: 0.5rem;
-        }
-
-        .stat-change.positive {
-            color: var(--success);
-        }
-
-        .stat-change.negative {
-            color: var(--danger);
-        }
-
-        /* Charts Grid */
-        .charts-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .chart-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 1.5rem;
-        }
-
-        .chart-card.wide {
-            grid-column: span 2;
-        }
-
-        .chart-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-        }
-
-        .chart-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .chart-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .chart-btn {
-            padding: 0.375rem 0.75rem;
-            font-size: 0.75rem;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all var(--transition-fast);
-        }
-
-        .chart-btn:hover,
-        .chart-btn.active {
-            background: var(--accent-primary);
-            color: white;
-            border-color: var(--accent-primary);
-        }
-
-        .chart-container {
-            height: 250px;
-            position: relative;
-        }
-
-        /* Recent Interviews Table */
-        .table-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .table-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-        }
-
-        .interviews-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        .interviews-table th,
-        .interviews-table td {
-            padding: 0.875rem 1rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .interviews-table th {
-            color: var(--text-muted);
-            font-size: 0.75rem;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        .interviews-table td {
-            font-size: 0.875rem;
-        }
-
-        .interviews-table tr:hover {
-            background: var(--bg-tertiary);
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            font-size: 0.75rem;
-            font-weight: 500;
-            border-radius: 100px;
-        }
-
-        .badge.positive {
-            background: rgba(34, 197, 94, 0.2);
-            color: var(--success);
-        }
-
-        .badge.neutral {
-            background: rgba(245, 158, 11, 0.2);
-            color: var(--warning);
-        }
-
-        .badge.negative {
-            background: rgba(239, 68, 68, 0.2);
-            color: var(--danger);
-        }
-
-        .badge.admission {
-            background: rgba(99, 102, 241, 0.2);
-            color: var(--accent-primary);
-        }
-
-        .badge.exit {
-            background: rgba(139, 92, 246, 0.2);
-            color: var(--accent-secondary);
-        }
-
-        /* Insights Panel */
-        .insights-panel {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 1.5rem;
-        }
-
-        .insight-item {
-            display: flex;
-            gap: 1rem;
-            padding: 1rem 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .insight-item:last-child {
-            border-bottom: none;
-        }
-
-        .insight-icon {
-            font-size: 1.5rem;
-            flex-shrink: 0;
-        }
-
-        .insight-content h4 {
-            font-size: 0.875rem;
-            margin-bottom: 0.25rem;
-        }
-
-        .insight-content p {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .charts-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .chart-card.wide {
-                grid-column: span 1;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .dashboard-header {
-                flex-direction: column;
-                gap: 1rem;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-    </style>
-</head>
-
-<body>
+{% block body %}
     <div class="dashboard-container">
         <!-- Header -->
         <header class="dashboard-header">
             <div class="logo-badge">
-                <span class="logo-icon">🎓</span>
+                <span class="logo-icon" aria-hidden="true">🎓</span>
                 <span class="logo-text">InterviewAI</span>
             </div>
-            <nav class="dashboard-nav">
+            <nav class="dashboard-nav" aria-label="Dashboard navigation">
                 <a href="/home" class="nav-link">Home</a>
-                <a href="/dashboard" class="nav-link active">Dashboard</a>
+                <a href="/dashboard" class="nav-link active" aria-current="page">Dashboard</a>
                 <a href="/create-interview" class="nav-link">New Interview</a>
             </nav>
             <div class="header-actions">
-                <button class="btn btn-small btn-secondary" onclick="exportReport()">
+                <button class="btn btn-small btn-secondary" onclick="exportReport()" aria-label="Export report">
                     📄 Export Report
                 </button>
+                <a href="/logout" class="btn btn-small btn-outline" aria-label="Log out">Logout</a>
             </div>
         </header>
 
@@ -340,31 +34,35 @@
                 <p>Interview analysis insights and trends</p>
             </div>
 
-            <!-- Stats Grid -->
+            <!-- Stats Grid with Skeleton Loaders -->
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-icon">📹</div>
-                    <div class="stat-value" id="total-interviews">0</div>
+                    <div class="stat-icon" aria-hidden="true">📹</div>
+                    <div class="stat-value" id="total-interviews">
+                        <div class="skeleton skeleton-value"></div>
+                    </div>
                     <div class="stat-label">Total Interviews</div>
-                    <div class="stat-change positive">↑ 12% this month</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">😊</div>
-                    <div class="stat-value" id="positive-rate">0%</div>
+                    <div class="stat-icon" aria-hidden="true">😊</div>
+                    <div class="stat-value" id="positive-rate">
+                        <div class="skeleton skeleton-value"></div>
+                    </div>
                     <div class="stat-label">Positive Sentiment</div>
-                    <div class="stat-change positive">↑ 5% vs last month</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">📈</div>
-                    <div class="stat-value" id="avg-engagement">0</div>
+                    <div class="stat-icon" aria-hidden="true">📈</div>
+                    <div class="stat-value" id="avg-engagement">
+                        <div class="skeleton skeleton-value"></div>
+                    </div>
                     <div class="stat-label">Avg Engagement Score</div>
-                    <div class="stat-change positive">↑ 0.3 pts</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">🎓</div>
-                    <div class="stat-value" id="unique-students">0</div>
+                    <div class="stat-icon" aria-hidden="true">🎓</div>
+                    <div class="stat-value" id="unique-students">
+                        <div class="skeleton skeleton-value"></div>
+                    </div>
                     <div class="stat-label">Students Interviewed</div>
-                    <div class="stat-change neutral">→ Same as last month</div>
                 </div>
             </div>
 
@@ -432,7 +130,7 @@
                 </div>
             </div>
 
-            <!-- Recent Interviews Table -->
+            <!-- Recent Interviews Table (no hardcoded data) -->
             <div class="table-card">
                 <div class="table-header">
                     <h3 class="chart-title">Recent Interviews</h3>
@@ -451,33 +149,10 @@
                         </tr>
                     </thead>
                     <tbody id="interviews-tbody">
-                        <!-- Populated dynamically -->
                         <tr>
-                            <td>Dec 9, 2024</td>
-                            <td>Juan Dela Cruz</td>
-                            <td>BS Computer Science</td>
-                            <td><span class="badge admission">Admission</span></td>
-                            <td><span class="badge positive">Positive</span></td>
-                            <td>8.5/10</td>
-                            <td><button class="chart-btn">View</button></td>
-                        </tr>
-                        <tr>
-                            <td>Dec 8, 2024</td>
-                            <td>Maria Santos</td>
-                            <td>BS Information Technology</td>
-                            <td><span class="badge exit">Exit</span></td>
-                            <td><span class="badge neutral">Neutral</span></td>
-                            <td>6.2/10</td>
-                            <td><button class="chart-btn">View</button></td>
-                        </tr>
-                        <tr>
-                            <td>Dec 7, 2024</td>
-                            <td>Pedro Reyes</td>
-                            <td>BS Computer Science</td>
-                            <td><span class="badge admission">Admission</span></td>
-                            <td><span class="badge positive">Positive</span></td>
-                            <td>9.1/10</td>
-                            <td><button class="chart-btn">View</button></td>
+                            <td colspan="7" style="text-align: center;">
+                                <div class="loading-spinner"></div>
+                            </td>
                         </tr>
                     </tbody>
                 </table>
@@ -486,34 +161,39 @@
             <!-- AI Insights -->
             <div class="insights-panel">
                 <h3 class="chart-title" style="margin-bottom: 1rem;">🤖 AI-Generated Insights</h3>
-                <div class="insight-item">
-                    <div class="insight-icon">📊</div>
-                    <div class="insight-content">
-                        <h4>Curriculum is the Most Discussed Topic</h4>
-                        <p>45% of interviews mention curriculum-related concerns. Consider gathering more specific
-                            feedback on course content.</p>
+                <div id="insights-content">
+                    <div class="insight-item">
+                        <div class="insight-icon" aria-hidden="true">📊</div>
+                        <div class="insight-content">
+                            <h4>Curriculum is the Most Discussed Topic</h4>
+                            <p>45% of interviews mention curriculum-related concerns. Consider gathering more specific
+                                feedback on course content.</p>
+                        </div>
                     </div>
-                </div>
-                <div class="insight-item">
-                    <div class="insight-icon">⚠️</div>
-                    <div class="insight-content">
-                        <h4>Academic Stress Indicators Detected</h4>
-                        <p>18% of recent exit interviews show signs of academic stress. Recommend expanding counseling
-                            services.</p>
+                    <div class="insight-item">
+                        <div class="insight-icon" aria-hidden="true">⚠️</div>
+                        <div class="insight-content">
+                            <h4>Academic Stress Indicators Detected</h4>
+                            <p>18% of recent exit interviews show signs of academic stress. Recommend expanding counseling
+                                services.</p>
+                        </div>
                     </div>
-                </div>
-                <div class="insight-item">
-                    <div class="insight-icon">💼</div>
-                    <div class="insight-content">
-                        <h4>Strong Career Orientation in Admission Interviews</h4>
-                        <p>New students show high interest in career outcomes. Strengthen industry partnership
-                            messaging.</p>
+                    <div class="insight-item">
+                        <div class="insight-icon" aria-hidden="true">💼</div>
+                        <div class="insight-content">
+                            <h4>Strong Career Orientation in Admission Interviews</h4>
+                            <p>New students show high interest in career outcomes. Strengthen industry partnership
+                                messaging.</p>
+                        </div>
                     </div>
                 </div>
             </div>
         </main>
     </div>
+{% endblock %}
 
+{% block scripts %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         // Chart.js configuration
         Chart.defaults.color = '#475569';
@@ -665,7 +345,7 @@
                 if (statsData.success) {
                     const stats = statsData.stats;
 
-                    // Update stat cards
+                    // Update stat cards (replace skeleton loaders)
                     document.getElementById('total-interviews').textContent = stats.total_interviews || 0;
                     document.getElementById('positive-rate').textContent = (stats.positive_rate || 0) + '%';
                     document.getElementById('avg-engagement').textContent = stats.avg_engagement || 0;
@@ -839,7 +519,6 @@
         // Update trend chart with data
         function updateTrendChart(trendData, days) {
             if (!trendData || trendData.length === 0) {
-                // Set default empty data
                 trendChart.data.labels = ['No data'];
                 trendChart.data.datasets[0].data = [0];
                 trendChart.data.datasets[1].data = [0];
@@ -848,7 +527,6 @@
                 return;
             }
 
-            // Group by date and sentiment
             const dateMap = {};
             trendData.forEach(item => {
                 const date = item.date;
@@ -860,14 +538,12 @@
                 }
             });
 
-            // Sort dates and get labels
             const sortedDates = Object.keys(dateMap).sort();
             const labels = sortedDates.map(d => {
                 const date = new Date(d);
                 return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             });
 
-            // Calculate percentages for each date
             const positiveData = sortedDates.map(d => {
                 const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
                 return total ? Math.round((dateMap[d].Positive / total) * 100) : 0;
@@ -897,6 +573,4 @@
             setInterval(loadDashboardData, 10000);
         });
     </script>
-</body>
-
-</html>
+{% endblock %}
