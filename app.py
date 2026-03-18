@@ -294,6 +294,9 @@ def user_home():
 @user_required
 def create_interview():
     """Create a new interview room (users/interviewers only)."""
+    if session.get('role') == 'student':
+        return render_template('error.html', message='Students are not allowed to create interview rooms.'), 403
+        
     room_id = str(uuid.uuid4())[:8].upper()
     
     # Create in database
@@ -740,7 +743,7 @@ def complete_interview(room_id):
     summary = db.calculate_interview_summary(interview_id)
     
     # Clean up active room
-    del active_rooms[room_id]
+    active_rooms.pop(room_id, None)
     
     return jsonify({'success': True, 'summary': summary})
 
@@ -913,7 +916,7 @@ def generate_ssl_certificate():
     
     # Get local IP address
     hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
+    local_ip = get_local_ip()
     
     # Create a key pair
     key = crypto.PKey()
