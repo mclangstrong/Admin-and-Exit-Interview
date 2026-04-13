@@ -742,7 +742,7 @@ function initializeSpeechRecognition() {
 
         speechRecognition.continuous = true;
         speechRecognition.interimResults = true;
-        speechRecognition.lang = 'en-US'; // Will also pick up Tagalog reasonably
+        speechRecognition.lang = 'fil'; // Filipino — handles Tagalog + English (Taglish)
 
         speechRecognition.onresult = (event) => {
             const results = event.results;
@@ -849,7 +849,7 @@ function initializeSpeechRecognition() {
 
         // === DIAGNOSTIC: Standalone speech test ===
         // Call testSpeechRecognition() from the browser console to test
-        window.testSpeechRecognition = function() {
+        window.testSpeechRecognition = function () {
             console.log('🧪 === SPEECH RECOGNITION TEST ===');
             const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
             const test = new SR();
@@ -874,7 +874,7 @@ function initializeSpeechRecognition() {
         };
 
         // === DIAGNOSTIC: Mic level test ===
-        window.testMicLevel = async function() {
+        window.testMicLevel = async function () {
             console.log('🧪 === MIC LEVEL TEST ===');
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -900,7 +900,7 @@ function initializeSpeechRecognition() {
                     ctx.close();
                     console.log(`🧪 Max mic level: ${maxLevel} ${maxLevel > 5 ? '✅ Mic is working!' : '❌ No audio detected - check mic!'}`);
                 }, 5000);
-            } catch(e) {
+            } catch (e) {
                 console.error('🧪 ❌ Mic test failed:', e);
             }
         };
@@ -1046,9 +1046,8 @@ function toggleTranscript() {
 
 function endInterview() {
     if (confirm('Are you sure you want to end this interview?')) {
-        // Notify server immediately so the student gets redirected
+        // Notify server — this broadcasts to the student
         socket.emit('interview-ended', { room_id: ROOM_ID });
-        socket.emit('leave-room', { room_id: ROOM_ID });
 
         // Stop recording and wait for upload before redirecting
         if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {

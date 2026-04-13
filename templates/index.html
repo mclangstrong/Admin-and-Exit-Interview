@@ -35,7 +35,7 @@
         <main class="actions-section">
             <div class="action-cards">
                 <!-- Create Interview Card (Admin/Interviewer Only) -->
-                {% if user and user.role != 'student' %}
+                {% if user and user.role == 'admin' %}
                 <div class="action-card create-card">
                     <div class="card-icon" aria-hidden="true">📹</div>
                     <h2>Start New Interview</h2>

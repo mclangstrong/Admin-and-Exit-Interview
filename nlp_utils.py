@@ -41,12 +41,10 @@ ENGAGEMENT_THRESHOLDS = {
 
 # Filler words to remove (English and Tagalog)
 FILLER_WORDS = [
-    # English fillers
-    "um", "uh", "er", "ah", "like", "you know", "i mean", "basically",
-    "actually", "literally", "honestly", "obviously", "right", "okay", "so",
-    # Tagalog fillers
-    "ano", "eh", "kasi", "parang", "ganun", "ganon", "alam mo", "di ba",
-    "tapos", "sige", "oo", "naman", "lang", "diba", "yung", "yun"
+    # English fillers (only true fillers, not meaningful words)
+    "um", "uh", "er", "ah", "hmm",
+    # Tagalog fillers (only hesitation sounds, not meaningful words)
+    "ano", "eh"
 ]
 
 # Common ASR errors and corrections

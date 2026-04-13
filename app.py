@@ -282,8 +282,8 @@ def user_home():
 @user_required
 def create_interview():
     """Create a new interview room (users/interviewers only)."""
-    if session.get('role') == 'student':
-        return render_template('error.html', message='Students are not allowed to create interview rooms.'), 403
+    if session.get('role') != 'admin':
+        return render_template('error.html', message='Only administrators can create interview rooms.'), 403
         
     room_id = str(uuid.uuid4())[:8].upper()
     
@@ -1032,32 +1032,36 @@ def handle_interview_started(data):
 def handle_interview_ended(data):
     """Notify all participants that interview has ended."""
     room_id = data.get('room_id')
-    if room_id in active_rooms:
-        active_rooms[room_id]['status'] = 'completed'
-        ended_at = datetime.now().isoformat()
-        active_rooms[room_id]['ended_at'] = ended_at
-        
-        # Calculate duration from started_at
-        duration_seconds = None
-        started_at = active_rooms[room_id].get('started_at')
-        if started_at:
-            try:
-                start_dt = datetime.fromisoformat(started_at)
-                end_dt = datetime.fromisoformat(ended_at)
-                duration_seconds = int((end_dt - start_dt).total_seconds())
-            except (ValueError, TypeError):
-                pass
-        
-        # Update database and calculate summary
-        interview_id = active_rooms[room_id]['interview_id']
-        db.update_interview(room_id, status='completed', ended_at=ended_at,
-                           duration_seconds=duration_seconds)
-        db.calculate_interview_summary(interview_id)
-        
-        # Clean up active room to prevent memory leak
-        active_rooms.pop(room_id, None)
-        
-    emit('interview-ended', {'timestamp': datetime.now().isoformat()}, room=room_id)
+    try:
+        if room_id in active_rooms:
+            active_rooms[room_id]['status'] = 'completed'
+            ended_at = datetime.now().isoformat()
+            active_rooms[room_id]['ended_at'] = ended_at
+            
+            # Calculate duration from started_at
+            duration_seconds = None
+            started_at = active_rooms[room_id].get('started_at')
+            if started_at:
+                try:
+                    start_dt = datetime.fromisoformat(started_at)
+                    end_dt = datetime.fromisoformat(ended_at)
+                    duration_seconds = int((end_dt - start_dt).total_seconds())
+                except (ValueError, TypeError):
+                    pass
+            
+            # Update database and calculate summary
+            interview_id = active_rooms[room_id]['interview_id']
+            db.update_interview(room_id, status='completed', ended_at=ended_at,
+                               duration_seconds=duration_seconds)
+            db.calculate_interview_summary(interview_id)
+            
+            # Clean up active room
+            active_rooms.pop(room_id, None)
+    except Exception as e:
+        print(f"Error processing interview end: {e}")
+    
+    # Always broadcast to the room — student needs this to redirect
+    emit('interview-ended', {'timestamp': datetime.now().isoformat()}, room=room_id, include_self=False)
 
 
 @socketio.on('transcript-line')
