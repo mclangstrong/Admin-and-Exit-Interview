@@ -28,7 +28,8 @@ SENTIMENT_SINGLE_FILE = "./model/taglish_sentiment_model_full.pth"
 EMOTION_MODEL_NAME = "bhadresh-savani/distilbert-base-uncased-emotion"
 
 # Label mappings
-SENTIMENT_LABELS = {0: "Positive", 1: "Neutral", 2: "Negative"}
+SENTIMENT_LABELS_RAW = {0: "Positive", 1: "Neutral", 2: "Negative"}
+SENTIMENT_LABELS = {0: "Positive", 1: "Negative"}
 EMOTION_LABELS = ["sadness", "joy", "love", "anger", "fear", "surprise"]
 
 # Engagement thresholds
@@ -274,7 +275,14 @@ class InterviewAnalyzer:
                 self.sentiment_model = AutoModelForSequenceClassification.from_pretrained(SENTIMENT_MODEL_PATH)
                 self.sentiment_model.to(self.device)
                 self.sentiment_model.eval()
-                print("✅ Sentiment model loaded from HuggingFace directory")
+                # INT8 dynamic quantization for faster CPU inference
+                if self.device == 'cpu':
+                    self.sentiment_model = torch.quantization.quantize_dynamic(
+                        self.sentiment_model, {torch.nn.Linear}, dtype=torch.qint8
+                    )
+                    print("✅ Sentiment model loaded + INT8 quantized")
+                else:
+                    print("✅ Sentiment model loaded from HuggingFace directory")
             elif os.path.exists(SENTIMENT_SINGLE_FILE):
                 # Try loading the full pickled model first
                 try:
@@ -396,19 +404,34 @@ class InterviewAnalyzer:
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = self.sentiment_model(**inputs)
             
             probs = torch.nn.functional.softmax(outputs.logits, dim=-1).cpu().numpy()[0]
-            pred_idx = int(np.argmax(probs))
+            
+            # Collapse 3-class (Positive/Neutral/Negative) into binary
+            # Distribute the Neutral probability proportionally
+            raw_pos = float(probs[0])
+            raw_neu = float(probs[1])
+            raw_neg = float(probs[2])
+            
+            pos_neg_sum = raw_pos + raw_neg
+            if pos_neg_sum > 0:
+                binary_pos = raw_pos + raw_neu * (raw_pos / pos_neg_sum)
+                binary_neg = raw_neg + raw_neu * (raw_neg / pos_neg_sum)
+            else:
+                binary_pos = 0.5
+                binary_neg = 0.5
+            
+            label = "Positive" if binary_pos >= binary_neg else "Negative"
+            confidence = max(binary_pos, binary_neg)
             
             return {
-                "label": SENTIMENT_LABELS[pred_idx],
-                "confidence": round(float(probs[pred_idx]), 4),
+                "label": label,
+                "confidence": round(confidence, 4),
                 "probabilities": {
-                    "Positive": round(float(probs[0]), 4),
-                    "Neutral": round(float(probs[1]), 4),
-                    "Negative": round(float(probs[2]), 4)
+                    "Positive": round(binary_pos, 4),
+                    "Negative": round(binary_neg, 4)
                 }
             }
         except Exception as e:
@@ -549,19 +572,20 @@ class InterviewAnalyzer:
     # MAIN ANALYSIS METHOD
     # ------------------------------------------------------------------------
     
-    def analyze(self, text: str) -> Dict[str, Any]:
+    def analyze(self, text: str, skip_keyphrases: bool = False) -> Dict[str, Any]:
         """
         Perform comprehensive analysis on text.
         
         Args:
             text: Input text (interview response)
+            skip_keyphrases: If True, skip KeyBERT extraction (faster for live use)
             
         Returns:
             Dict containing all analysis results
         """
         
-        # Run all analyses
-        keyphrases = self.extract_keyphrases(text)
+        # Run analyses (optionally skip keyphrases for speed)
+        keyphrases = [] if skip_keyphrases else self.extract_keyphrases(text)
         sentiment = self.analyze_sentiment(text)
         emotions = self.analyze_emotion(text)
         engagement = self.calculate_engagement(text, sentiment, keyphrases)

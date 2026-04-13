@@ -19,8 +19,30 @@ const ICE_SERVERS = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        // TURN servers (relay) — needed when both peers are behind symmetric NATs
+        {
+            urls: 'turn:a.relay.metered.ca:80',
+            username: 'e8dd65b92f6aee43ccbacaad',
+            credential: '5V3sFnChHHELD/ew'
+        },
+        {
+            urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+            username: 'e8dd65b92f6aee43ccbacaad',
+            credential: '5V3sFnChHHELD/ew'
+        },
+        {
+            urls: 'turns:a.relay.metered.ca:443',
+            username: 'e8dd65b92f6aee43ccbacaad',
+            credential: '5V3sFnChHHELD/ew'
+        },
     ]
 };
+
+// Debug mode - set to true for verbose console logging
+const DEBUG = true;
+
+// CSRF token for secure API requests
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
 // ============================================================================
 // State
@@ -39,6 +61,11 @@ let timerInterval = null;
 let recordingStartTime = null;
 let speechRecognition = null;
 let transcript = [];
+let _speechBuffer = '';       // Debounce buffer for rapid speech
+let _speechDebounceTimer = null;  // Debounce timer ID
+const SPEECH_DEBOUNCE_MS = 3000;  // Collect speech for 3 seconds before sending
+let recordingAudioContext = null; // AudioContext used during recording (for cleanup)
+let remoteAudioPollTimer = null;  // Polls for remote audio if it arrives late
 
 // ============================================================================
 // DOM Elements
@@ -162,13 +189,10 @@ function initializeSocket() {
 
     socket.on('participant-joined', async (data) => {
         console.log('👤 Participant joined:', data);
-        console.log('   My socket ID:', socket.id);
-        console.log('   Joining socket ID:', data.sid);
-        console.log('   Total participants:', data.count);
 
         // Auto-fill form if user data is provided AND it's a student joining
         if (data.user_data && data.role === 'student') {
-            console.log('📋 Received user data for auto-fill:', data.user_data);
+            if (DEBUG) console.log('📋 Received user data for auto-fill:', data.user_data);
             fillFormWithStudentData(data.user_data);
         }
 
@@ -179,14 +203,35 @@ function initializeSocket() {
                 await createPeerConnection();
             }
 
+            // Warm up the NLP pipeline so first transcript is fast
+            try {
+                fetch('/api/warmup', { method: 'POST' });
+                if (DEBUG) console.log('🔥 NLP warm-up request sent');
+            } catch (e) {
+                // Non-critical, ignore errors
+            }
+
             // If I am NOT the one who just joined, I should create the offer
             if (data.sid !== socket.id) {
-                console.log('📤 I am the first participant - creating offer for newcomer...');
+                if (DEBUG) console.log('📤 I am the first participant - creating offer for newcomer...');
                 // Small delay to ensure both sides have added tracks
                 await new Promise(resolve => setTimeout(resolve, 500));
                 await createOffer();
             } else {
-                console.log('📥 I am the second participant - waiting for offer...');
+                if (DEBUG) console.log('📥 I am the second participant - waiting for offer...');
+            }
+        }
+
+        // Late-join recovery: if student joins after interview already started,
+        // start speech recognition immediately
+        if (USER_ROLE === 'student' && data.interview_in_progress && speechRecognition && !isRecording) {
+            console.log('🎤 Late-join: Interview already in progress, starting speech recognition...');
+            isRecording = true;
+            try {
+                speechRecognition.start();
+                console.log('✅ Late-join speech recognition started');
+            } catch (error) {
+                console.error('❌ Failed to start late-join speech recognition:', error);
             }
         }
     });
@@ -264,9 +309,12 @@ function initializeSocket() {
             localStream.getTracks().forEach(track => track.stop());
         }
 
-        // Show message and redirect
-        alert('The interview has ended. Redirecting to home page...');
-        window.location.href = '/home';
+        // Redirect to appropriate page with ended flag for modal
+        if (USER_ROLE === 'student') {
+            window.location.href = '/home?ended=1';
+        } else {
+            window.location.href = '/dashboard?ended=1';
+        }
     });
 
     socket.on('transcript-line', (data) => {
@@ -293,32 +341,48 @@ function initializeSocket() {
     });
 
     socket.on('analysis-update', (data) => {
-        console.log('📊 Received analysis update:', data);
+        if (DEBUG) console.log('📊 Received analysis update:', data);
 
         // Only update if it's from another participant (student → interviewer)
         if (data.speaker !== USER_ROLE) {
-            const sentimentEl = document.getElementById('live-sentiment');
-            const emotionEl = document.getElementById('live-emotion');
-            const engagementEl = document.getElementById('engagement-bar');
-
-            if (sentimentEl && data.analysis.sentiment) {
-                console.log('💭 Updating interviewer sentiment to:', data.analysis.sentiment);
-                sentimentEl.textContent = data.analysis.sentiment;
-                sentimentEl.className = 'analysis-value ' + (data.analysis.sentiment.toLowerCase());
+            if (liveSentiment && data.analysis.sentiment) {
+                liveSentiment.textContent = data.analysis.sentiment;
+                liveSentiment.className = 'analysis-value ' + (data.analysis.sentiment.toLowerCase());
             }
 
-            if (emotionEl && data.analysis.emotion) {
-                console.log('😊 Updating interviewer emotion to:', data.analysis.emotion);
-                emotionEl.textContent = data.analysis.emotion;
+            if (liveEmotion && data.analysis.emotion) {
+                liveEmotion.textContent = data.analysis.emotion;
             }
 
-            if (engagementEl && data.analysis.engagement !== undefined) {
-                const barWidth = `${data.analysis.engagement * 10}%`;
-                console.log('📈 Updating interviewer engagement to:', barWidth);
-                engagementEl.style.width = barWidth;
+            if (engagementBar && data.analysis.engagement !== undefined) {
+                engagementBar.style.width = `${data.analysis.engagement * 10}%`;
+            }
+        }
+    });
+
+    // Listen for async analysis results pushed from server
+    socket.on('analysis-result', (data) => {
+        if (DEBUG) console.log('📊 Received analysis result via WebSocket:', data);
+
+        if (data.analysis) {
+            const analysis = data.analysis;
+
+            // Update local UI (if interviewer)
+            if (liveSentiment) {
+                const sentimentLabel = analysis.sentiment?.label || '--';
+                liveSentiment.textContent = sentimentLabel;
+                liveSentiment.className = 'analysis-value ' + (sentimentLabel.toLowerCase());
             }
 
-            console.log('✅ Interviewer UI updated with student analysis');
+            if (liveEmotion && analysis.emotions) {
+                const topEmotion = Object.entries(analysis.emotions)
+                    .sort((a, b) => b[1] - a[1])[0];
+                liveEmotion.textContent = topEmotion ? topEmotion[0] : '--';
+            }
+
+            if (engagementBar && analysis.engagement) {
+                engagementBar.style.width = `${analysis.engagement.score * 10}%`;
+            }
         }
     });
 }
@@ -428,56 +492,131 @@ async function startRecording() {
     console.log('⏺️ Starting recording...');
 
     recordedChunks = [];
+    let recordingSetupOk = false;
 
-    // Create a combined stream for recording
-    const audioContext = new AudioContext();
-    const destination = audioContext.createMediaStreamDestination();
+    // ── Audio recording setup (wrapped in try/catch so speech recognition
+    //    starts even if recording hardware/codec fails) ──
+    try {
+        // Create a combined audio stream for recording (mixing both participants)
+        const audioContext = new AudioContext();
+        recordingAudioContext = audioContext; // Store for cleanup
+        const destination = audioContext.createMediaStreamDestination();
+        let remoteAudioConnected = false;
 
-    // Add local audio (only if available)
-    if (localStream && localStream.getAudioTracks().length > 0) {
-        const localSource = audioContext.createMediaStreamSource(
-            new MediaStream(localStream.getAudioTracks())
-        );
-        localSource.connect(destination);
-    }
-
-    // Add remote audio (only if available)
-    if (remoteStream && remoteStream.getAudioTracks().length > 0) {
-        const remoteSource = audioContext.createMediaStreamSource(
-            new MediaStream(remoteStream.getAudioTracks())
-        );
-        remoteSource.connect(destination);
-    }
-
-    // Create combined stream with video (if available)
-    const videoTrack = localStream?.getVideoTracks()[0];
-    const combinedStream = new MediaStream([
-        ...destination.stream.getAudioTracks(),
-        ...(videoTrack ? [videoTrack] : [])
-    ]);
-
-    // Check if we have any tracks to record
-    if (combinedStream.getTracks().length === 0) {
-        alert('No audio or video available to record. Please allow camera/microphone access.');
-        return;
-    }
-
-    mediaRecorder = new MediaRecorder(combinedStream, {
-        mimeType: 'video/webm;codecs=vp9,opus'
-    });
-
-    mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-            recordedChunks.push(event.data);
+        // Add local audio (interviewer's mic)
+        if (localStream && localStream.getAudioTracks().length > 0) {
+            const localSource = audioContext.createMediaStreamSource(
+                new MediaStream(localStream.getAudioTracks())
+            );
+            localSource.connect(destination);
+            console.log('🎙️ Local audio connected to recording mix');
+        } else {
+            console.warn('⚠️ No local audio tracks available for recording');
         }
-    };
 
-    mediaRecorder.onstop = () => {
-        console.log('⏹️ Recording stopped');
-        saveRecording();
-    };
+        // Helper: connect remote audio to the mixer
+        function connectRemoteAudio() {
+            if (remoteAudioConnected) return true;
+            if (remoteStream && remoteStream.getAudioTracks().length > 0 && audioContext.state !== 'closed') {
+                try {
+                    const remoteSource = audioContext.createMediaStreamSource(
+                        new MediaStream(remoteStream.getAudioTracks())
+                    );
+                    remoteSource.connect(destination);
+                    remoteAudioConnected = true;
+                    console.log('🎙️ Remote audio connected to recording mix');
+                    return true;
+                } catch (e) {
+                    console.error('Failed to connect remote audio:', e);
+                    return false;
+                }
+            }
+            return false;
+        }
 
-    mediaRecorder.start(1000); // Capture in 1-second chunks
+        // Try connecting remote audio immediately
+        connectRemoteAudio();
+
+        // Poll for remote audio if it hasn't connected yet (covers timing gaps)
+        if (!remoteAudioConnected) {
+            console.log('⏳ Remote audio not ready yet — polling every 500ms...');
+            let pollAttempts = 0;
+            const MAX_POLL_ATTEMPTS = 60; // 30 seconds max
+            remoteAudioPollTimer = setInterval(() => {
+                pollAttempts++;
+                if (connectRemoteAudio()) {
+                    console.log(`✅ Remote audio connected after ${pollAttempts * 500}ms`);
+                    clearInterval(remoteAudioPollTimer);
+                    remoteAudioPollTimer = null;
+                } else if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    console.warn('⚠️ Remote audio never became available during recording');
+                    clearInterval(remoteAudioPollTimer);
+                    remoteAudioPollTimer = null;
+                }
+            }, 500);
+        }
+
+        // Also listen for new remote tracks added after recording starts (renegotiation)
+        if (peerConnection) {
+            const origOnTrack = peerConnection.ontrack;
+            peerConnection.ontrack = (event) => {
+                // Call the original handler first (adds track to remoteVideo)
+                if (origOnTrack) origOnTrack(event);
+
+                // Connect new audio tracks to the recording mix
+                if (event.track.kind === 'audio' && !remoteAudioConnected && audioContext.state !== 'closed') {
+                    try {
+                        const newRemoteSource = audioContext.createMediaStreamSource(
+                            new MediaStream([event.track])
+                        );
+                        newRemoteSource.connect(destination);
+                        remoteAudioConnected = true;
+                        console.log('🎙️ Late remote audio track connected to recording mix via ontrack');
+                        // Stop polling if still running
+                        if (remoteAudioPollTimer) {
+                            clearInterval(remoteAudioPollTimer);
+                            remoteAudioPollTimer = null;
+                        }
+                    } catch (e) {
+                        console.error('Failed to connect late remote audio:', e);
+                    }
+                }
+            };
+        }
+
+        // Create audio-only combined stream (no video — smaller files, audio playback only)
+        const combinedStream = new MediaStream([
+            ...destination.stream.getAudioTracks()
+        ]);
+
+        // Check if we have any tracks to record
+        if (combinedStream.getTracks().length === 0) {
+            console.warn('⚠️ No audio tracks for recording, but speech recognition will still start');
+        } else {
+            mediaRecorder = new MediaRecorder(combinedStream, {
+                mimeType: 'audio/webm;codecs=opus'
+            });
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                console.log('⏹️ Recording stopped');
+                saveRecording();
+            };
+
+            mediaRecorder.start(1000); // Capture in 1-second chunks
+            recordingSetupOk = true;
+            console.log('✅ MediaRecorder started');
+        }
+    } catch (recordingError) {
+        console.error('⚠️ Recording setup failed (speech recognition will still start):', recordingError);
+    }
+
+    // ── These MUST run regardless of whether recording setup succeeded ──
     isRecording = true;
     recordingStartTime = Date.now();
 
@@ -485,7 +624,7 @@ async function startRecording() {
     updateRecordingUI(true);
     startTimer();
 
-    // Start speech recognition
+    // Start speech recognition (independent of recording)
     if (speechRecognition) {
         console.log('🎤 Starting speech recognition...');
         try {
@@ -498,8 +637,12 @@ async function startRecording() {
         console.warn('⚠️ Speech recognition not available');
     }
 
-    // Notify server
+    // Notify server (so student can start transcription)
     socket.emit('interview-started', { room_id: ROOM_ID });
+
+    if (!recordingSetupOk) {
+        console.warn('⚠️ Audio recording is NOT active, but live transcription IS running');
+    }
 }
 
 function stopRecording() {
@@ -510,6 +653,16 @@ function stopRecording() {
     }
 
     isRecording = false;
+
+    // Cleanup audio context and polling
+    if (remoteAudioPollTimer) {
+        clearInterval(remoteAudioPollTimer);
+        remoteAudioPollTimer = null;
+    }
+    if (recordingAudioContext && recordingAudioContext.state !== 'closed') {
+        recordingAudioContext.close();
+        recordingAudioContext = null;
+    }
 
     // Update UI
     updateRecordingUI(false);
@@ -522,13 +675,13 @@ function stopRecording() {
 }
 
 async function saveRecording() {
-    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
 
     // Upload to server
     const formData = new FormData();
     formData.append('audio', blob, 'interview.webm');
     formData.append('room_id', ROOM_ID);
-    formData.append('channel', 'mixed');
+    formData.append('channel', 'combined');
 
     try {
         const response = await fetch('/api/upload-recording', {
@@ -557,7 +710,7 @@ function downloadRecording() {
         return;
     }
 
-    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -566,15 +719,11 @@ function downloadRecording() {
 }
 
 // ============================================================================
-// Speech Recognition (Student Only)
+// Speech Recognition (Both Roles)
 // ============================================================================
 
 function initializeSpeechRecognition() {
-    // Only students can have their speech transcribed
-    if (USER_ROLE !== 'student') {
-        console.log('🎤 Speech recognition disabled for interviewer (only student speech is transcribed)');
-        return;
-    }
+    console.log(`🎤 Initializing speech recognition for role: ${USER_ROLE}...`);
 
     console.log('🎤 Checking for Web Speech API support...');
 
@@ -599,57 +748,164 @@ function initializeSpeechRecognition() {
             const results = event.results;
             const lastResult = results[results.length - 1];
 
-            console.log('🎤 Speech detected:', lastResult[0].transcript, 'Final:', lastResult.isFinal);
+            // ALWAYS log speech detection (diagnostic)
+            console.log('🎤 SPEECH DETECTED:', lastResult[0].transcript, '| Final:', lastResult.isFinal, '| Confidence:', lastResult[0].confidence);
+            _lastSpeechTime = Date.now(); // Reset backoff — user is speaking
 
             if (lastResult.isFinal) {
                 const text = lastResult[0].transcript.trim();
-                console.log('✅ Final transcript:', text);
 
-                // Only process if there's actual text (not empty or whitespace)
+                // Only process non-empty text
                 if (text.length > 0) {
-                    addTranscriptLine('student', text);
-                    analyzeTranscriptLine(text);
-                } else {
-                    console.log('⚠️ Skipping empty transcript');
+                    console.log(`✅ FINAL TRANSCRIPT (${USER_ROLE}):`, text);
+
+                    // Add to transcript UI with correct speaker label
+                    addTranscriptLine(USER_ROLE, text);
+
+                    // Only analyze student speech — interviewer speech is
+                    // saved to transcript but NOT sent through NLP
+                    if (USER_ROLE === 'student') {
+                        // Debounce: buffer rapid speech into one combined request
+                        _speechBuffer += ((_speechBuffer ? ' ' : '') + text);
+                        clearTimeout(_speechDebounceTimer);
+                        _speechDebounceTimer = setTimeout(() => {
+                            const buffered = _speechBuffer.trim();
+                            _speechBuffer = '';
+                            if (buffered.length > 0) {
+                                analyzeTranscriptLine(buffered);
+                            }
+                        }, SPEECH_DEBOUNCE_MS);
+                    } else {
+                        // Interviewer: just save transcript, no analysis
+                        saveTranscriptOnly(text);
+                    }
                 }
             }
         };
 
+        // ── Restart backoff state ──
+        // Prevents rapid start/end loops that cause Chrome to throttle
+        let _restartDelay = 300;           // Current delay (ms)
+        const _RESTART_MIN_DELAY = 300;    // Minimum delay between restarts
+        const _RESTART_MAX_DELAY = 5000;   // Maximum backoff delay (5s)
+        let _lastSpeechTime = 0;           // Timestamp of last successful speech detection
+
         speechRecognition.onerror = (event) => {
-            console.error('❌ Speech recognition error:', event.error, event);
-            if (event.error !== 'no-speech') {
-                // Restart on recoverable errors
-                setTimeout(() => {
-                    if (isRecording && speechRecognition) {
-                        console.log('🔄 Restarting speech recognition after error...');
-                        try {
-                            speechRecognition.start();
-                        } catch (e) {
-                            console.error('❌ Failed to restart:', e);
-                        }
-                    }
-                }, 1000);
+            console.warn('⚠️ Speech recognition error:', event.error);
+            if (event.error === 'no-speech') {
+                // no-speech is normal — onend will fire and handle the restart
+                return;
             }
+            if (event.error === 'aborted') {
+                // aborted usually means another tab or the system took over the mic
+                console.warn('⚠️ Speech recognition aborted — will retry with delay');
+            }
+            // Restart on recoverable errors with delay
+            setTimeout(() => {
+                if (isRecording && speechRecognition) {
+                    console.log('🔄 Restarting speech recognition after error...');
+                    try {
+                        speechRecognition.start();
+                    } catch (e) {
+                        // Already running — that's fine
+                    }
+                }
+            }, 1500);
         };
 
         speechRecognition.onend = () => {
-            console.log('🛑 Speech recognition ended');
-            // Auto-restart if still recording
-            if (isRecording) {
-                console.log('🔄 Auto-restarting speech recognition...');
-                try {
-                    speechRecognition.start();
-                } catch (e) {
-                    console.error('❌ Failed to auto-restart:', e);
+            console.log(`🛑 Speech recognition ended. isRecording: ${isRecording}, isMuted: ${isMuted}, restartDelay: ${_restartDelay}ms`);
+            if (!isRecording || isMuted) return; // Don't restart if muted
+
+            // Schedule restart with current backoff delay
+            setTimeout(() => {
+                if (isRecording && speechRecognition && !isMuted) {
+                    try {
+                        speechRecognition.start();
+                    } catch (e) {
+                        // Already running — ignore
+                    }
                 }
+            }, _restartDelay);
+
+            // Increase backoff if no speech was detected recently (prevents tight loop)
+            const timeSinceLastSpeech = Date.now() - _lastSpeechTime;
+            if (timeSinceLastSpeech > 10000) {
+                // No speech in 10+ seconds — increase delay (Chrome may be throttling)
+                _restartDelay = Math.min(_restartDelay * 1.5, _RESTART_MAX_DELAY);
+            } else {
+                // Speech was detected recently — keep delay low
+                _restartDelay = _RESTART_MIN_DELAY;
             }
         };
 
         speechRecognition.onstart = () => {
-            console.log('▶️ Speech recognition started and listening...');
+            console.log('▶️ Speech recognition STARTED. Role:', USER_ROLE);
+            // Reset backoff on successful start
+            _restartDelay = _RESTART_MIN_DELAY;
         };
 
-        console.log('🎤 Speech recognition initialized successfully (Student only)');
+        console.log(`🎤 Speech recognition initialized successfully (${USER_ROLE})`);
+
+        // === DIAGNOSTIC: Standalone speech test ===
+        // Call testSpeechRecognition() from the browser console to test
+        window.testSpeechRecognition = function() {
+            console.log('🧪 === SPEECH RECOGNITION TEST ===');
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const test = new SR();
+            test.continuous = false;
+            test.interimResults = false;
+            test.lang = 'en-US';
+            test.onresult = (e) => {
+                console.log('🧪 ✅ TEST HEARD:', e.results[0][0].transcript);
+                console.log('🧪 Speech recognition IS WORKING!');
+            };
+            test.onerror = (e) => {
+                console.log('🧪 ❌ TEST ERROR:', e.error);
+            };
+            test.onend = () => {
+                console.log('🧪 TEST ENDED');
+            };
+            test.onstart = () => {
+                console.log('🧪 TEST STARTED - speak now!');
+            };
+            test.start();
+            console.log('🧪 Speak something within 10 seconds...');
+        };
+
+        // === DIAGNOSTIC: Mic level test ===
+        window.testMicLevel = async function() {
+            console.log('🧪 === MIC LEVEL TEST ===');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const ctx = new AudioContext();
+                const source = ctx.createMediaStreamSource(stream);
+                const analyser = ctx.createAnalyser();
+                source.connect(analyser);
+                const data = new Uint8Array(analyser.fftSize);
+                let maxLevel = 0;
+                const check = setInterval(() => {
+                    analyser.getByteTimeDomainData(data);
+                    let level = 0;
+                    for (let i = 0; i < data.length; i++) {
+                        level = Math.max(level, Math.abs(data[i] - 128));
+                    }
+                    maxLevel = Math.max(maxLevel, level);
+                    const bar = '█'.repeat(Math.floor(level / 4));
+                    console.log(`🎤 Mic level: ${level} ${bar}`);
+                }, 500);
+                setTimeout(() => {
+                    clearInterval(check);
+                    stream.getTracks().forEach(t => t.stop());
+                    ctx.close();
+                    console.log(`🧪 Max mic level: ${maxLevel} ${maxLevel > 5 ? '✅ Mic is working!' : '❌ No audio detected - check mic!'}`);
+                }, 5000);
+            } catch(e) {
+                console.error('🧪 ❌ Mic test failed:', e);
+            }
+        };
+
+        console.log('🧪 TIP: Run testSpeechRecognition() or testMicLevel() in console to diagnose');
     } catch (error) {
         console.error('❌ Failed to initialize speech recognition:', error);
         speechRecognition = null;
@@ -687,113 +943,52 @@ function addTranscriptLine(speaker, text) {
     });
 }
 
-async function analyzeTranscriptLine(text) {
-    console.log('🔍 analyzeTranscriptLine called with text:', text);
+function analyzeTranscriptLine(text) {
+    if (DEBUG) console.log('🔍 analyzeTranscriptLine called with text:', text);
 
-    // Re-check elements exist (get fresh references each time)
-    const sentimentEl = document.getElementById('live-sentiment');
-    const emotionEl = document.getElementById('live-emotion');
-    const engagementEl = document.getElementById('engagement-bar');
-
-    console.log('🔍 Element check:');
-    console.log('   sentimentEl:', sentimentEl ? '✅' : '❌');
-    console.log('   emotionEl:', emotionEl ? '✅' : '❌');
-    console.log('   engagementEl:', engagementEl ? '✅' : '❌');
-
-    try {
-        // Save transcript line to database AND analyze with trained model
-        console.log('📤 Sending POST to /api/transcript...');
-        const response = await fetch('/api/transcript', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                room_id: ROOM_ID,
-                speaker: USER_ROLE,
-                text: text
-            })
-        });
-
-        console.log('📥 Response status:', response.status);
-        const result = await response.json();
-        console.log('📊 Full API response:', result);
-
-        if (result.success && result.analysis) {
-            const analysis = result.analysis;
-            console.log('✅ Analysis data received:', analysis);
-
-            // Update sentiment display using fresh element reference
-            if (sentimentEl) {
-                const sentimentLabel = analysis.sentiment?.label || '--';
-                console.log('💭 Updating sentiment to:', sentimentLabel);
-                sentimentEl.textContent = sentimentLabel;
-                sentimentEl.className = 'analysis-value ' + (sentimentLabel.toLowerCase());
-                console.log('   ✅ Sentiment element updated');
-            } else {
-                console.warn('⚠️ sentimentEl not found - user may not be interviewer');
-            }
-
-            // Update emotion display
-            if (emotionEl && analysis.emotions) {
-                const topEmotion = Object.entries(analysis.emotions)
-                    .sort((a, b) => b[1] - a[1])[0];
-                const emotionLabel = topEmotion ? topEmotion[0] : '--';
-                console.log('😊 Updating emotion to:', emotionLabel);
-                emotionEl.textContent = emotionLabel;
-                console.log('   ✅ Emotion element updated');
-            } else {
-                console.warn('⚠️ emotionEl not found or no emotions in analysis');
-            }
-
-            // Update engagement bar
-            if (engagementEl && analysis.engagement) {
-                const engagementScore = analysis.engagement.score;
-                const barWidth = `${engagementScore * 10}%`;
-                console.log('📈 Updating engagement bar to:', barWidth, '(score:', engagementScore, ')');
-                engagementEl.style.width = barWidth;
-                console.log('   ✅ Engagement bar updated');
-            } else {
-                console.warn('⚠️ engagementEl not found or no engagement in analysis');
-            }
-
-            console.log('✅ UI update complete');
-
-            // Broadcast analysis to other participants (interviewer)
-            console.log('📡 Broadcasting analysis to room...');
-            console.log('🔍 DEBUG: Full analysis object:', analysis);
-            console.log('🔍 DEBUG: analysis.emotions:', analysis.emotions);
-            console.log('🔍 DEBUG: typeof analysis.emotions:', typeof analysis.emotions);
-            console.log('🔍 DEBUG: Object.keys(analysis.emotions):', analysis.emotions ? Object.keys(analysis.emotions) : 'null');
-
-            // Extract top emotion from analysis data (not from DOM element)
-            let topEmotion = '--';
-            if (analysis.emotions && Object.keys(analysis.emotions).length > 0) {
-                const emotionEntries = Object.entries(analysis.emotions).sort((a, b) => b[1] - a[1]);
-                console.log('🔍 DEBUG: emotionEntries:', emotionEntries);
-                topEmotion = emotionEntries[0]?.[0] || '--';
-                console.log('🔍 DEBUG: topEmotion extracted:', topEmotion);
-            } else {
-                console.warn('⚠️ DEBUG: No emotions found or empty object');
-            }
-
-            socket.emit('analysis-update', {
-                room_id: ROOM_ID,
-                speaker: USER_ROLE,
-                analysis: {
-                    sentiment: analysis.sentiment?.label || '--',
-                    emotion: topEmotion,
-                    engagement: analysis.engagement?.score || 0
-                }
-            });
-            console.log('   ✅ Analysis broadcast sent with emotion:', topEmotion);
-        } else {
-            console.error('❌ No analysis in response or success=false:', result);
+    // Fire-and-forget POST — analysis results arrive via WebSocket 'analysis-result' event
+    fetch('/api/transcript', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': CSRF_TOKEN
+        },
+        body: JSON.stringify({
+            room_id: ROOM_ID,
+            speaker: USER_ROLE,
+            text: text
+        })
+    }).then(response => {
+        if (!response.ok) {
+            console.error(`❌ Transcript API error: ${response.status} ${response.statusText}`);
         }
-    } catch (error) {
-        console.error('❌ Analysis failed with error:', error);
-        console.error('Error stack:', error.stack);
-    }
+    }).catch(error => {
+        console.error('❌ Transcript save failed:', error);
+    });
 }
 
+function saveTranscriptOnly(text) {
+    // Save interviewer transcript to DB without triggering NLP analysis
+    fetch('/api/transcript', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': CSRF_TOKEN
+        },
+        body: JSON.stringify({
+            room_id: ROOM_ID,
+            speaker: USER_ROLE,
+            text: text,
+            analyze: false
+        })
+    }).then(response => {
+        if (!response.ok) {
+            console.error(`❌ Interviewer transcript API error: ${response.status} ${response.statusText}`);
+        }
+    }).catch(error => {
+        console.error('❌ Interviewer transcript save failed:', error);
+    });
+}
 
 // ============================================================================
 // Controls
@@ -806,6 +1001,23 @@ function toggleMic() {
         audioTracks.forEach(track => {
             track.enabled = !isMuted;
         });
+
+        // Also pause/resume speech recognition — the Web Speech API has its
+        // own mic access independent of the MediaStream tracks. Without this,
+        // the user's speech is still transcribed even when "muted."
+        if (speechRecognition && isRecording) {
+            if (isMuted) {
+                try {
+                    speechRecognition.abort(); // abort instead of stop to prevent onend restart
+                    console.log('🔇 Speech recognition paused (mic muted)');
+                } catch (e) { /* ignore */ }
+            } else {
+                try {
+                    speechRecognition.start();
+                    console.log('🔊 Speech recognition resumed (mic unmuted)');
+                } catch (e) { /* already running */ }
+            }
+        }
 
         const micBtn = document.getElementById('mic-btn');
         micBtn.classList.toggle('active', isMuted);
@@ -834,31 +1046,54 @@ function toggleTranscript() {
 
 function endInterview() {
     if (confirm('Are you sure you want to end this interview?')) {
-        // Stop recording if active
-        if (isRecording) {
-            stopRecording();
-        }
-
-        // Notify server
+        // Notify server immediately so the student gets redirected
         socket.emit('interview-ended', { room_id: ROOM_ID });
         socket.emit('leave-room', { room_id: ROOM_ID });
 
-        // Close peer connection
-        if (peerConnection) {
-            peerConnection.close();
-        }
+        // Stop recording and wait for upload before redirecting
+        if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+            console.log('⏹️ Stopping recording before ending interview...');
 
-        // Stop all tracks
-        if (localStream) {
-            localStream.getTracks().forEach(track => track.stop());
-        }
+            // Override onstop to save recording, then cleanup and redirect
+            mediaRecorder.onstop = async () => {
+                console.log('⏹️ Recording stopped, uploading...');
+                await saveRecording();
+                console.log('✅ Recording saved, now redirecting...');
+                cleanupAndRedirect();
+            };
 
-        // Redirect based on role (interviewer -> dashboard, student -> home)
-        if (USER_ROLE === 'interviewer') {
-            window.location.href = '/dashboard';
+            // Stop speech recognition
+            if (speechRecognition) {
+                speechRecognition.stop();
+            }
+            isRecording = false;
+            updateRecordingUI(false);
+            stopTimer();
+
+            mediaRecorder.stop();
         } else {
-            window.location.href = '/home';
+            // No recording active, just cleanup and redirect
+            cleanupAndRedirect();
         }
+    }
+}
+
+function cleanupAndRedirect() {
+    // Close peer connection
+    if (peerConnection) {
+        peerConnection.close();
+    }
+
+    // Stop all tracks
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+    }
+
+    // Redirect based on role
+    if (USER_ROLE === 'interviewer') {
+        window.location.href = '/dashboard';
+    } else {
+        window.location.href = '/home';
     }
 }
 

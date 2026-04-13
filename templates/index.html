@@ -99,7 +99,7 @@
                 <div class="feature-item">
                     <div class="feature-icon" aria-hidden="true">💭</div>
                     <h3>Sentiment Analysis</h3>
-                    <p>Classify responses as Positive, Neutral, or Negative</p>
+                    <p>Classify responses as Positive or Negative</p>
                 </div>
                 <div class="feature-item">
                     <div class="feature-icon" aria-hidden="true">📝</div>
@@ -120,6 +120,16 @@
             <p class="footer-sub">Built with ❤️ for Computer Science Students</p>
         </footer>
     </div>
+
+    <!-- Interview Ended Modal -->
+    <div class="modal-overlay" id="interview-ended-modal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-icon">📞</div>
+            <h2 class="modal-title">Interview Ended</h2>
+            <p class="modal-message">The interviewer has ended the call. Thank you for participating in the interview session.</p>
+            <button class="btn btn-primary" onclick="closeEndedModal()" style="margin-top: 1rem; width: 100%;">OK</button>
+        </div>
+    </div>
 {% endblock %}
 
 {% block scripts %}
@@ -137,5 +147,19 @@
         document.getElementById('room-code').addEventListener('input', function (e) {
             e.target.value = e.target.value.toUpperCase();
         });
+
+        // Show "Interview Ended" modal if redirected from an ended interview
+        document.addEventListener('DOMContentLoaded', () => {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('ended') === '1') {
+                document.getElementById('interview-ended-modal').style.display = 'flex';
+                // Clean the URL so refreshing doesn't re-show the modal
+                window.history.replaceState({}, '', window.location.pathname);
+            }
+        });
+
+        function closeEndedModal() {
+            document.getElementById('interview-ended-modal').style.display = 'none';
+        }
     </script>
 {% endblock %}

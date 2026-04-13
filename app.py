@@ -1,6 +1,11 @@
 import os
 import sys
 
+# Fix Windows console encoding for emoji characters in log output
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # Eventlet monkey-patching MUST come before all other imports
 import eventlet
 eventlet.monkey_patch()
@@ -45,8 +50,6 @@ import os
 import json
 import uuid
 import tempfile
-from threading import Thread
-from queue import Queue
 from functools import wraps
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for, flash
@@ -58,6 +61,9 @@ from flask_limiter.util import get_remote_address
 
 # Import database module
 import database as db
+
+# Import transcript preprocessing
+from nlp_utils import clean_transcript
 
 # ============================================================================
 # APP CONFIGURATION
@@ -144,24 +150,6 @@ def get_analyzer():
         )
     return _analyzer
 
-
-# Background analysis worker (#13)
-_analysis_queue = Queue()
-
-def _analysis_worker():
-    """Background thread that processes NLP analysis without blocking requests."""
-    while True:
-        interview_id, transcript_id, text = _analysis_queue.get()
-        try:
-            analyzer = get_analyzer()
-            analysis = analyzer.analyze(text)
-            db.save_analysis(interview_id, analysis, transcript_id)
-        except Exception as e:
-            print(f"Background analysis error: {e}")
-        _analysis_queue.task_done()
-
-_worker_thread = Thread(target=_analysis_worker, daemon=True)
-_worker_thread.start()
 
 
 # ============================================================================
@@ -376,10 +364,120 @@ def get_dashboard_stats():
 def get_recent_interviews():
     """Get recent interviews for dashboard table."""
     try:
-        interviews = db.get_recent_interviews(limit=10)
+        limit = request.args.get('limit', 10, type=int)
+        limit = min(limit, 100)  # Cap at 100 to prevent abuse
+        interviews = db.get_recent_interviews(limit=limit)
         return jsonify({'success': True, 'interviews': interviews})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/export', methods=['GET'])
+@admin_required
+def export_report():
+    """Export interview report as XLSX file with optional date filtering."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    days_param = request.args.get('days', 'all')
+    days = int(days_param) if days_param.isdigit() else None
+    
+    interviews = db.get_interviews_for_export(days=days)
+    
+    # Create workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Interview Report"
+    
+    # Header styling
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="6366F1", end_color="6366F1", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        bottom=Side(style="thin", color="E2E8F0")
+    )
+    
+    # Column definitions
+    headers = [
+        "ID", "Date", "Student Name", "Program", "Cohort",
+        "Interview Type", "Status", "Duration (min)",
+        "Sentiment", "Emotion", "Engagement Score", "Word Count"
+    ]
+    
+    # Write headers
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+    
+    # Write data rows
+    for row_idx, iv in enumerate(interviews, 2):
+        created = iv.get('created_at', '')
+        # Format date nicely
+        try:
+            from datetime import datetime as dt
+            date_obj = dt.fromisoformat(created.replace('Z', '+00:00') if created else '')
+            created = date_obj.strftime('%b %d, %Y %I:%M %p')
+        except Exception:
+            pass
+        
+        # Duration in minutes
+        duration = iv.get('duration_seconds')
+        duration_min = round(duration / 60, 1) if duration else '--'
+        
+        engagement = iv.get('avg_engagement_score')
+        engagement_str = f"{engagement:.1f}/10" if engagement else '--'
+        
+        row_data = [
+            iv.get('id', ''),
+            created,
+            iv.get('student_name', 'Anonymous'),
+            iv.get('program', '--'),
+            iv.get('cohort', '--'),
+            (iv.get('interview_type', 'admission') or 'admission').capitalize(),
+            (iv.get('status', '--') or '--').capitalize(),
+            duration_min,
+            iv.get('dominant_sentiment', '--') or '--',
+            iv.get('dominant_emotion', '--') or '--',
+            engagement_str,
+            iv.get('total_words', '--') or '--'
+        ]
+        
+        for col, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+    
+    # Auto-size columns
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = min(max_length + 4, 30)
+    
+    # Freeze header row
+    ws.freeze_panes = "A2"
+    
+    # Generate filename
+    range_label = f"last_{days}_days" if days else "all_time"
+    filename = f"interview_report_{range_label}.xlsx"
+    
+    # Write to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    from flask import send_file
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )
 
 
 @app.route('/api/interview/<int:interview_id>', methods=['GET'])
@@ -449,7 +547,7 @@ def get_full_interview_details(interview_id):
                             item['emotion'] = dominant_emotion
                         else:
                             item['emotion'] = 'neutral'
-                    except:
+                    except (ValueError, TypeError, json.JSONDecodeError):
                         item['emotion'] = analysis[i].get('audio_emotion') or 'neutral'
                 else:
                     item['emotion'] = analysis[i].get('audio_emotion') or 'neutral'
@@ -459,13 +557,19 @@ def get_full_interview_details(interview_id):
         # Get saved topic classification if exists
         topic_classification = db.get_topic_classification(interview_id)
         
+        # Check if recording file exists
+        recording_path = interview.get('recording_path')
+        has_recording = bool(recording_path and os.path.exists(recording_path))
+        
         return jsonify({
             'success': True,
             'interview': interview,
+            'transcript_raw': [dict(t) for t in transcript_raw],
             'transcript': transcript,
             'analysis': analysis,
             'summary': summary,
-            'topic_classification': topic_classification
+            'topic_classification': topic_classification,
+            'has_recording': has_recording
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -600,14 +704,37 @@ def upload_recording():
     })
 
 
+@app.route('/api/interview/<int:interview_id>/recording', methods=['GET'])
+@admin_required
+def get_interview_recording(interview_id):
+    """Serve the recording file for an interview (audio or video)."""
+    try:
+        interview = db.get_interview_by_id(interview_id)
+        if not interview:
+            return jsonify({'error': 'Interview not found'}), 404
+
+        recording_path = interview.get('recording_path')
+        if not recording_path or not os.path.exists(recording_path):
+            return jsonify({'error': 'No recording available for this interview'}), 404
+
+        # Serve the file safely with Range request support for seeking
+        directory = os.path.dirname(os.path.abspath(recording_path))
+        filename = os.path.basename(recording_path)
+        mimetype = 'audio/webm'
+        return send_from_directory(directory, filename, mimetype=mimetype, conditional=True)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/transcript', methods=['POST'])
 @csrf.exempt
 def save_transcript_line():
-    """Save a transcript line and queue it for background analysis (#13)."""
+    """Save a transcript line and optionally trigger async analysis via WebSocket."""
     data = request.json
     room_id = data.get('room_id')
     speaker = data.get('speaker', 'student')
     text = data.get('text', '')
+    should_analyze = data.get('analyze', True)  # Default: analyze (student speech)
     
     if not room_id or not text:
         return jsonify({'error': 'Missing room_id or text'}), 400
@@ -617,29 +744,52 @@ def save_transcript_line():
     
     interview_id = active_rooms[room_id]['interview_id']
     
-    # Save transcript line
+    # Save transcript line immediately (original text preserved)
     transcript_id = db.add_transcript_line(interview_id, speaker, text)
     
-    # Analyze synchronously so the client gets real-time results
+    # Only run NLP analysis on student speech
+    if should_analyze and speaker == 'student':
+        # Preprocess transcript: remove fillers, fix ASR errors
+        cleaned_text = clean_transcript(text)
+        
+        # Spawn async analysis — results will be pushed via WebSocket
+        def run_analysis():
+            try:
+                analyzer = get_analyzer()
+                # skip_keyphrases=True for faster live analysis
+                analysis = analyzer.analyze(cleaned_text, skip_keyphrases=True)
+                
+                # Save analysis to database
+                db.save_analysis(interview_id, analysis, transcript_id)
+                
+                # Push results to room via WebSocket
+                socketio.emit('analysis-result', {
+                    'transcript_id': transcript_id,
+                    'analysis': analysis
+                }, room=room_id)
+            except Exception as e:
+                print(f"Async analysis error: {e}")
+        
+        eventlet.spawn(run_analysis)
+    
+    # Return immediately — no waiting for analysis
+    return jsonify({
+        'success': True,
+        'transcript_id': transcript_id
+    })
+
+
+@app.route('/api/warmup', methods=['POST'])
+@csrf.exempt
+def warmup_analyzer():
+    """Warm up the NLP pipeline so first real transcript doesn't hit cold inference."""
     try:
         analyzer = get_analyzer()
-        analysis = analyzer.analyze(text)
-        
-        # Save analysis to database
-        db.save_analysis(interview_id, analysis, transcript_id)
-        
-        return jsonify({
-            'success': True,
-            'transcript_id': transcript_id,
-            'analysis': analysis
-        })
+        # Run a quick dummy analysis to warm up all model paths (skip keyphrases for speed)
+        analyzer.analyze("warmup", skip_keyphrases=True)
+        return jsonify({'success': True})
     except Exception as e:
-        return jsonify({
-            'success': True,
-            'transcript_id': transcript_id,
-            'analysis': None,
-            'analysis_error': str(e)
-        })
+        return jsonify({'success': True, 'warning': str(e)})
 
 
 @app.route('/api/analyze', methods=['POST'])
@@ -808,12 +958,16 @@ def handle_join_room(data):
                 'cohort': datetime.now().strftime('%d/%m/%Y')
             }
 
+    # Check if interview is already in progress (for late-join recovery)
+    interview_in_progress = active_rooms[room_id].get('status') == 'in-progress'
+    
     # Notify all participants in the room
     emit('participant-joined', {
         'sid': request.sid,
         'role': role,
         'count': participant_count,
-        'user_data': user_data
+        'user_data': user_data,
+        'interview_in_progress': interview_in_progress
     }, room=room_id)
 
 
@@ -883,10 +1037,25 @@ def handle_interview_ended(data):
         ended_at = datetime.now().isoformat()
         active_rooms[room_id]['ended_at'] = ended_at
         
+        # Calculate duration from started_at
+        duration_seconds = None
+        started_at = active_rooms[room_id].get('started_at')
+        if started_at:
+            try:
+                start_dt = datetime.fromisoformat(started_at)
+                end_dt = datetime.fromisoformat(ended_at)
+                duration_seconds = int((end_dt - start_dt).total_seconds())
+            except (ValueError, TypeError):
+                pass
+        
         # Update database and calculate summary
         interview_id = active_rooms[room_id]['interview_id']
-        db.update_interview(room_id, status='completed', ended_at=ended_at)
+        db.update_interview(room_id, status='completed', ended_at=ended_at,
+                           duration_seconds=duration_seconds)
         db.calculate_interview_summary(interview_id)
+        
+        # Clean up active room to prevent memory leak
+        active_rooms.pop(room_id, None)
         
     emit('interview-ended', {'timestamp': datetime.now().isoformat()}, room=room_id)
 
@@ -992,26 +1161,29 @@ if __name__ == '__main__':
     # Pre-load the analyzer first (so banner prints when server is truly ready)
     get_analyzer()
     
-    # Always generate SSL certs - HTTPS is required for WebRTC camera access
-    try:
-        generate_ssl_certificate()
-        print("   🔒 SSL certificates generated successfully")
-    except Exception as e:
-        print(f"   ⚠️  SSL cert generation failed: {e}")
-        print("   🔄 Retrying SSL cert generation...")
+    # Generate SSL certs only if they don't already exist
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        print("   🔒 SSL certificates already exist, reusing")
+    else:
         try:
-            # Delete stale certs and retry
-            for f in [cert_file, key_file]:
-                if os.path.exists(f):
-                    os.remove(f)
             generate_ssl_certificate()
-            print("   🔒 SSL certificates generated on retry")
-        except Exception as e2:
-            print(f"   ❌ SSL cert generation failed permanently: {e2}")
-            print("   ❌ Cannot start server without HTTPS (required for WebRTC)")
-            print("   💡 Install pyOpenSSL: pip install pyOpenSSL")
-            import sys
-            sys.exit(1)
+            print("   🔒 SSL certificates generated successfully")
+        except Exception as e:
+            print(f"   ⚠️  SSL cert generation failed: {e}")
+            print("   🔄 Retrying SSL cert generation...")
+            try:
+                # Delete stale certs and retry
+                for f in [cert_file, key_file]:
+                    if os.path.exists(f):
+                        os.remove(f)
+                generate_ssl_certificate()
+                print("   🔒 SSL certificates generated on retry")
+            except Exception as e2:
+                print(f"   ❌ SSL cert generation failed permanently: {e2}")
+                print("   ❌ Cannot start server without HTTPS (required for WebRTC)")
+                print("   💡 Install pyOpenSSL: pip install pyOpenSSL")
+                import sys
+                sys.exit(1)
     
     # Print startup banner after models are loaded and certs are ready
     if not is_reloader:

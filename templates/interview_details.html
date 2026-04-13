@@ -21,7 +21,9 @@
         <main class="details-main">
             <!-- Interview Header -->
             <div class="interview-header-card">
-                <h1 id="interview-title">Interview Analysis</h1>
+                <div class="header-top-row">
+                    <h1 id="interview-title">Interview Analysis</h1>
+                </div>
                 <div class="interview-meta">
                     <div class="meta-item">
                         <span class="meta-label">Student</span>
@@ -44,6 +46,42 @@
                         <span class="meta-value" id="status">--</span>
                     </div>
                 </div>
+
+                <!-- Inline Audio Player (hidden until recording is available) -->
+                <div class="audio-player-section" id="audio-player-section" style="display: none;">
+                    <div class="audio-player-card">
+                        <div class="audio-player-header">
+                            <span class="audio-player-icon">🎧</span>
+                            <span class="audio-player-title">Interview Recording</span>
+                            <span class="audio-player-badge">Interviewer + Student</span>
+                        </div>
+                        <div class="audio-player-controls">
+                            <button class="audio-play-btn" id="audio-play-btn" onclick="toggleAudioPlayback()" aria-label="Play recording">
+                                <span id="audio-play-icon">▶️</span>
+                            </button>
+                            <div class="audio-progress-wrapper">
+                                <input type="range" class="audio-progress" id="audio-progress" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)">
+                                <div class="audio-time">
+                                    <span id="audio-current-time">0:00</span>
+                                    <span id="audio-duration">0:00</span>
+                                </div>
+                            </div>
+                            <div class="audio-volume-wrapper">
+                                <span class="audio-volume-icon" onclick="toggleMuteAudio()">🔊</span>
+                                <input type="range" class="audio-volume" id="audio-volume" value="100" min="0" max="100" oninput="setAudioVolume(this.value)">
+                            </div>
+                        </div>
+                        <audio id="audio-element" preload="metadata"></audio>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Raw Conversation Transcript -->
+            <div class="raw-transcript-section" id="raw-transcript-section">
+                <h3 class="section-title">💬 Full Conversation</h3>
+                <div class="raw-transcript-list" id="raw-transcript-list">
+                    <div class="loading-spinner"></div>
+                </div>
             </div>
 
             <!-- Analysis Summary -->
@@ -54,7 +92,7 @@
                     <div class="analysis-label">Dominant Sentiment</div>
                 </div>
                 <div class="analysis-card">
-                    <div class="analysis-icon" aria-hidden="true">😊</div>
+                    <div class="analysis-icon" id="emotion-icon" aria-hidden="true">🎭</div>
                     <div class="analysis-value" id="dominant-emotion">--</div>
                     <div class="analysis-label">Dominant Emotion</div>
                 </div>
@@ -74,7 +112,7 @@
                     </div>
                 </div>
                 <div class="chart-card">
-                    <h3 class="section-title">😊 Emotion Breakdown</h3>
+                    <h3 class="section-title">🎭 Emotion Breakdown</h3>
                     <div class="chart-container">
                         <canvas id="emotionChart"></canvas>
                     </div>
@@ -98,7 +136,7 @@
 
             <!-- Transcript with Analysis -->
             <div class="transcript-section">
-                <h3 class="section-title">📝 Full Transcript with Analysis</h3>
+                <h3 class="section-title">📝 Student Transcript with Analysis</h3>
                 <div class="transcript-list" id="transcript-list">
                     <div class="loading-spinner"></div>
                 </div>
@@ -115,7 +153,112 @@
 
         const interviewId = "{{ interview_id }}";
 
-        // Fetch interview details
+        // =============================================
+        // Audio Player State
+        // =============================================
+        const audioElement = document.getElementById('audio-element');
+        const audioPlayBtn = document.getElementById('audio-play-btn');
+        const audioPlayIcon = document.getElementById('audio-play-icon');
+        const audioProgress = document.getElementById('audio-progress');
+        const audioCurrentTime = document.getElementById('audio-current-time');
+        const audioDuration = document.getElementById('audio-duration');
+        const audioVolume = document.getElementById('audio-volume');
+
+        // Format seconds to M:SS
+        function formatTime(seconds) {
+            if (isNaN(seconds) || !isFinite(seconds)) return '0:00';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // Audio player controls
+        function toggleAudioPlayback() {
+            if (audioElement.paused) {
+                audioElement.play();
+                audioPlayIcon.textContent = '⏸️';
+            } else {
+                audioElement.pause();
+                audioPlayIcon.textContent = '▶️';
+            }
+        }
+
+        function seekAudio(value) {
+            const dur = resolvedDuration || audioElement.duration;
+            if (dur && isFinite(dur)) {
+                audioElement.currentTime = (value / 100) * dur;
+            }
+        }
+
+        function setAudioVolume(value) {
+            audioElement.volume = value / 100;
+            const icon = document.querySelector('.audio-volume-icon');
+            if (value == 0) icon.textContent = '🔇';
+            else if (value < 50) icon.textContent = '🔉';
+            else icon.textContent = '🔊';
+        }
+
+        function toggleMuteAudio() {
+            audioElement.muted = !audioElement.muted;
+            const icon = document.querySelector('.audio-volume-icon');
+            if (audioElement.muted) {
+                icon.textContent = '🔇';
+                audioVolume.value = 0;
+            } else {
+                icon.textContent = '🔊';
+                audioVolume.value = audioElement.volume * 100;
+            }
+        }
+
+        // Audio event listeners
+        let resolvedDuration = 0; // Track the real duration once resolved
+
+        audioElement.addEventListener('loadedmetadata', () => {
+            if (audioElement.duration && isFinite(audioElement.duration)) {
+                resolvedDuration = audioElement.duration;
+                audioDuration.textContent = formatTime(resolvedDuration);
+            } else {
+                // WebM from MediaRecorder often has Infinity duration —
+                // force the browser to calculate it by seeking to the end
+                audioElement.currentTime = 1e10; // seek to a huge value
+            }
+        });
+
+        audioElement.addEventListener('durationchange', () => {
+            if (audioElement.duration && isFinite(audioElement.duration)) {
+                resolvedDuration = audioElement.duration;
+                audioDuration.textContent = formatTime(resolvedDuration);
+            }
+        });
+
+        // After the seek-to-max trick, the browser fires timeupdate with the
+        // real duration now available — reset playback position to 0
+        audioElement.addEventListener('timeupdate', () => {
+            // Once duration resolves via the seek trick, snap back to start
+            if (resolvedDuration === 0 && isFinite(audioElement.duration) && audioElement.duration > 0) {
+                resolvedDuration = audioElement.duration;
+                audioDuration.textContent = formatTime(resolvedDuration);
+                audioElement.currentTime = 0;
+                return;
+            }
+
+            if (resolvedDuration > 0) {
+                const pct = (audioElement.currentTime / resolvedDuration) * 100;
+                audioProgress.value = pct;
+                audioCurrentTime.textContent = formatTime(audioElement.currentTime);
+            }
+        });
+
+        audioElement.addEventListener('ended', () => {
+            audioPlayIcon.textContent = '▶️';
+            audioProgress.value = 0;
+            audioCurrentTime.textContent = '0:00';
+        });
+
+        // =============================================
+        // Data Loading
+        // =============================================
+
         async function loadInterviewDetails() {
             try {
                 const response = await fetch(`/api/interview/${interviewId}/details`);
@@ -123,9 +266,16 @@
 
                 if (data.success) {
                     displayInterview(data.interview);
+                    displayRawTranscript(data.transcript_raw);
                     displayTranscript(data.transcript);
                     displayAnalysis(data.analysis);
                     displaySummary(data.summary);
+
+                    // Show audio player if recording exists
+                    if (data.has_recording) {
+                        audioElement.src = `/api/interview/${interviewId}/recording`;
+                        document.getElementById('audio-player-section').style.display = 'block';
+                    }
 
                     // Load saved topic classification if exists
                     if (data.topic_classification) {
@@ -164,6 +314,48 @@
                 (interview.status || 'completed').slice(1);
         }
 
+        function displayRawTranscript(transcript) {
+            const container = document.getElementById('raw-transcript-list');
+
+            if (!transcript || transcript.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        No conversation transcript available.
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = transcript.map(item => {
+                const speaker = (item.speaker || 'student').toLowerCase();
+                const isInterviewer = speaker === 'interviewer';
+                const label = isInterviewer ? 'Interviewer' : 'Student';
+                const icon = isInterviewer ? '🎙️' : '🎓';
+
+                return `
+                    <div class="chat-message ${isInterviewer ? 'interviewer' : 'student'}">
+                        <div class="chat-avatar">${icon}</div>
+                        <div class="chat-bubble">
+                            <div class="chat-speaker">${label}</div>
+                            <div class="chat-text">${item.text}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Emotion-to-emoji mapping
+        const emotionEmojis = {
+            'joy': '😄', 'happy': '😄',
+            'sadness': '😢', 'sad': '😢',
+            'anger': '😡', 'angry': '😡',
+            'fear': '😨', 'fearful': '😨',
+            'surprise': '😲', 'surprised': '😲',
+            'love': '🥰',
+            'disgust': '🤢', 'disgusted': '🤢',
+            'neutral': '😐', 'calm': '😌'
+        };
+
         function displaySummary(summary) {
             if (!summary) return;
 
@@ -172,8 +364,13 @@
             document.getElementById('dominant-sentiment').className =
                 'analysis-value sentiment-' + (summary.dominant_sentiment || '').toLowerCase();
 
-            document.getElementById('dominant-emotion').textContent =
-                summary.dominant_emotion || '--';
+            const emotion = summary.dominant_emotion || '--';
+            document.getElementById('dominant-emotion').textContent = emotion;
+
+            const emotionIcon = document.getElementById('emotion-icon');
+            if (emotionIcon && emotion !== '--') {
+                emotionIcon.textContent = emotionEmojis[emotion.toLowerCase()] || '🎭';
+            }
 
             document.getElementById('engagement-score').textContent =
                 summary.avg_engagement_score ?
@@ -192,7 +389,21 @@
                 return;
             }
 
-            container.innerHTML = transcript.map((item, index) => `
+            // Only show student lines — interviewer lines have no analysis
+            const studentLines = transcript.filter(item =>
+                (item.speaker || '').toLowerCase() === 'student' || item.sentiment
+            );
+
+            if (studentLines.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        No student transcript with analysis available.
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = studentLines.map((item, index) => `
                 <div class="transcript-item">
                     <div class="transcript-speaker">🎓 Student</div>
                     <div class="transcript-text">${item.text}</div>
@@ -211,7 +422,7 @@
             if (!analysis) return;
 
             // Sentiment chart
-            const sentiments = { Positive: 0, Neutral: 0, Negative: 0 };
+            const sentiments = { Positive: 0, Negative: 0 };
             analysis.forEach(a => {
                 if (a.sentiment_label) {
                     sentiments[a.sentiment_label] = (sentiments[a.sentiment_label] || 0) + 1;
@@ -221,10 +432,10 @@
             new Chart(document.getElementById('sentimentChart'), {
                 type: 'doughnut',
                 data: {
-                    labels: ['Positive', 'Neutral', 'Negative'],
+                    labels: ['Positive', 'Negative'],
                     datasets: [{
-                        data: [sentiments.Positive, sentiments.Neutral, sentiments.Negative],
-                        backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+                        data: [sentiments.Positive, sentiments.Negative],
+                        backgroundColor: ['#22c55e', '#ef4444'],
                         borderWidth: 0
                     }]
                 },

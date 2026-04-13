@@ -204,6 +204,7 @@
 
 .remote-video {
     aspect-ratio: 16/9;
+    min-height: 0;
 }
 
 .local-video {
@@ -381,9 +382,6 @@
     color: var(--success);
 }
 
-.analysis-value.neutral {
-    color: var(--warning);
-}
 
 .analysis-value.negative {
     color: var(--danger);
@@ -528,6 +526,21 @@
     .interview-main {
         flex-direction: column;
         overflow-y: auto;
+        padding: 0.5rem;
+    }
+
+    /* Make the video grid fit within the viewport */
+    .video-grid {
+        /* account for header (~90px) + controls (~70px) + padding */
+        max-height: calc(100vh - 170px);
+        min-height: 250px;
+    }
+
+    .remote-video {
+        aspect-ratio: auto;
+        width: 100%;
+        height: 100%;
+        max-height: calc(100vh - 180px);
     }
 
     .interview-sidebar {
@@ -565,9 +578,12 @@
         gap: 0.5rem;
     }
 
+    /* Larger local video PiP so student can see themselves */
     .local-video {
-        width: 120px;
-        height: 90px;
+        width: 140px;
+        height: 105px;
+        bottom: 0.75rem;
+        left: 0.75rem;
     }
 }
 
@@ -594,12 +610,20 @@
         font-size: 0.5rem;
     }
 
+    /* Slightly smaller PiP for very small screens but still larger than before */
     .local-video {
-        width: 100px;
-        height: 75px;
+        width: 130px;
+        height: 97px;
+        bottom: 0.5rem;
+        left: 0.5rem;
     }
 
     .sidebar-panel {
         min-width: 100%;
+    }
+
+    /* Constrain remote video for small screens */
+    .remote-video {
+        max-height: calc(100vh - 160px);
     }
 }

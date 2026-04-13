@@ -119,10 +119,10 @@
                     </div>
                 </div>
 
-                <!-- Interview Types -->
+                <!-- Sentiment by Interview Type -->
                 <div class="chart-card">
                     <div class="chart-header">
-                        <h3 class="chart-title">Interview Types</h3>
+                        <h3 class="chart-title">Sentiment by Interview Type</h3>
                     </div>
                     <div class="chart-container">
                         <canvas id="typeChart"></canvas>
@@ -130,11 +130,13 @@
                 </div>
             </div>
 
-            <!-- Recent Interviews Table (no hardcoded data) -->
+            <!-- Recent Interviews Table with Search & Pagination -->
             <div class="table-card">
                 <div class="table-header">
                     <h3 class="chart-title">Recent Interviews</h3>
-                    <button class="btn btn-small btn-outline">View All</button>
+                    <div class="table-search">
+                        <input type="text" id="interview-search" placeholder="Search by student, program, type, sentiment..." oninput="filterInterviews()">
+                    </div>
                 </div>
                 <table class="interviews-table">
                     <thead>
@@ -156,6 +158,11 @@
                         </tr>
                     </tbody>
                 </table>
+                <div class="table-pagination">
+                    <button class="btn btn-small btn-outline" id="btn-prev" onclick="changePage(-1)" disabled>&larr; Back</button>
+                    <span id="page-indicator">Page 1 of 1</span>
+                    <button class="btn btn-small btn-outline" id="btn-next" onclick="changePage(1)" disabled>Next &rarr;</button>
+                </div>
             </div>
 
             <!-- AI Insights -->
@@ -189,7 +196,124 @@
                 </div>
             </div>
         </main>
+
+        <!-- Export Report Modal -->
+        <div id="export-modal" class="export-modal-overlay" style="display:none">
+            <div class="export-modal-card">
+                <div class="export-modal-header">
+                    <h3>📄 Export Interview Report</h3>
+                    <button class="export-modal-close" onclick="closeExportModal()">&times;</button>
+                </div>
+                <p class="export-modal-desc">Select a time range to export interview data as an Excel file.</p>
+                <div class="export-modal-buttons">
+                    <button class="export-btn" onclick="downloadReport(7)">
+                        <span class="export-btn-icon">📅</span>
+                        <span class="export-btn-label">Last 7 Days</span>
+                    </button>
+                    <button class="export-btn" onclick="downloadReport(30)">
+                        <span class="export-btn-icon">📆</span>
+                        <span class="export-btn-label">Last 30 Days</span>
+                    </button>
+                    <button class="export-btn" onclick="downloadReport(90)">
+                        <span class="export-btn-icon">🗓️</span>
+                        <span class="export-btn-label">Last 90 Days</span>
+                    </button>
+                    <button class="export-btn export-btn-all" onclick="downloadReport('all')">
+                        <span class="export-btn-icon">📊</span>
+                        <span class="export-btn-label">All Time</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interview Ended Modal -->
+        <div class="modal-overlay" id="interview-ended-modal" style="display: none;">
+            <div class="modal-card">
+                <div class="modal-icon">📞</div>
+                <h2 class="modal-title">Interview Ended</h2>
+                <p class="modal-message">The interview session has ended. All data has been saved and can be reviewed from the Recent Interviews table below.</p>
+                <button class="btn btn-primary" onclick="closeEndedModal()" style="margin-top: 1rem; width: 100%;">OK</button>
+            </div>
+        </div>
     </div>
+
+    <style>
+        .export-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.2s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .export-modal-card {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            max-width: 440px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            animation: slideUp 0.25s ease;
+        }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .export-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .export-modal-header h3 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: #1e293b;
+        }
+        .export-modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            border-radius: 8px;
+            transition: all 0.15s;
+        }
+        .export-modal-close:hover { background: #f1f5f9; color: #1e293b; }
+        .export-modal-desc {
+            color: #64748b;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }
+        .export-modal-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+        .export-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1.25rem 1rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            background: #f8fafc;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .export-btn:hover {
+            border-color: #6366f1;
+            background: #eef2ff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+        }
+        .export-btn-icon { font-size: 1.5rem; }
+        .export-btn-label { font-size: 0.85rem; font-weight: 600; color: #334155; }
+        .export-btn-all { grid-column: 1 / -1; }
+    </style>
 {% endblock %}
 
 {% block scripts %}
@@ -208,10 +332,10 @@
             sentimentChart = new Chart(document.getElementById('sentimentChart'), {
                 type: 'doughnut',
                 data: {
-                    labels: ['Positive', 'Neutral', 'Negative'],
+                    labels: ['Positive', 'Negative'],
                     datasets: [{
-                        data: [0, 0, 0],
-                        backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+                        data: [0, 0],
+                        backgroundColor: ['#22c55e', '#ef4444'],
                         borderWidth: 0
                     }]
                 },
@@ -251,35 +375,27 @@
                 }
             });
 
-            // Sentiment Trend (Line)
+            // Sentiment Trend (Stacked Bar - shows interview counts per date)
             trendChart = new Chart(document.getElementById('trendChart'), {
-                type: 'line',
+                type: 'bar',
                 data: {
-                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    labels: [],
                     datasets: [
                         {
                             label: 'Positive',
-                            data: [0, 0, 0, 0],
+                            data: [],
+                            backgroundColor: 'rgba(34, 197, 94, 0.85)',
                             borderColor: '#22c55e',
-                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                            fill: true,
-                            tension: 0.4
-                        },
-                        {
-                            label: 'Neutral',
-                            data: [0, 0, 0, 0],
-                            borderColor: '#f59e0b',
-                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                            fill: true,
-                            tension: 0.4
+                            borderWidth: 1,
+                            borderRadius: 3
                         },
                         {
                             label: 'Negative',
-                            data: [0, 0, 0, 0],
+                            data: [],
+                            backgroundColor: 'rgba(239, 68, 68, 0.85)',
                             borderColor: '#ef4444',
-                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                            fill: true,
-                            tension: 0.4
+                            borderWidth: 1,
+                            borderRadius: 3
                         }
                     ]
                 },
@@ -287,7 +403,21 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: { legend: { position: 'bottom' } },
-                    scales: { y: { beginAtZero: true, max: 100 } }
+                    scales: {
+                        x: { stacked: true },
+                        y: {
+                            stacked: true,
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1,
+                                callback: (val) => Number.isInteger(val) ? val : ''
+                            },
+                            title: {
+                                display: true,
+                                text: 'Number of Interviews'
+                            }
+                        }
+                    }
                 }
             });
 
@@ -316,30 +446,57 @@
                 }
             });
 
-            // Interview Types (Pie)
+            // Sentiment by Interview Type (Grouped Bar)
             typeChart = new Chart(document.getElementById('typeChart'), {
-                type: 'pie',
+                type: 'bar',
                 data: {
                     labels: ['Admission', 'Exit'],
-                    datasets: [{
-                        data: [0, 0],
-                        backgroundColor: ['#6366f1', '#8b5cf6'],
-                        borderWidth: 0
-                    }]
+                    datasets: [
+                        {
+                            label: 'Positive',
+                            data: [0, 0],
+                            backgroundColor: 'rgba(34, 197, 94, 0.85)',
+                            borderColor: '#22c55e',
+                            borderWidth: 1,
+                            borderRadius: 6
+                        },
+                        {
+                            label: 'Negative',
+                            data: [0, 0],
+                            backgroundColor: 'rgba(239, 68, 68, 0.85)',
+                            borderColor: '#ef4444',
+                            borderWidth: 1,
+                            borderRadius: 6
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom' } }
+                    plugins: { legend: { position: 'bottom' } },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1,
+                                callback: (val) => Number.isInteger(val) ? val : ''
+                            },
+                            title: {
+                                display: true,
+                                text: 'Number of Interviews'
+                            }
+                        }
+                    }
                 }
             });
         }
 
-        // Fetch dashboard data from API
+        // Fetch dashboard data from API (respects current filter state)
         async function loadDashboardData() {
             try {
-                // Fetch stats
-                const statsResponse = await fetch('/api/dashboard/stats');
+                // Fetch stats with current filter state preserved
+                const statsUrl = `/api/dashboard/stats?sentiment_filter=${currentSentimentFilter}&trend_days=${currentTrendDays}`;
+                const statsResponse = await fetch(statsUrl);
                 const statsData = await statsResponse.json();
 
                 if (statsData.success) {
@@ -355,7 +512,6 @@
                     const sentDist = stats.sentiment_distribution || {};
                     sentimentChart.data.datasets[0].data = [
                         sentDist['Positive'] || 0,
-                        sentDist['Neutral'] || 0,
                         sentDist['Negative'] || 0
                     ];
                     sentimentChart.update();
@@ -372,11 +528,17 @@
                     ];
                     emotionChart.update();
 
-                    // Update type chart
-                    const typeDist = stats.type_distribution || {};
+                    // Update type sentiment comparison chart
+                    const typeSent = stats.type_sentiment || {};
+                    const admission = typeSent['admission'] || {};
+                    const exit = typeSent['exit'] || {};
                     typeChart.data.datasets[0].data = [
-                        typeDist['admission'] || 0,
-                        typeDist['exit'] || 0
+                        admission['Positive'] || 0,
+                        exit['Positive'] || 0
+                    ];
+                    typeChart.data.datasets[1].data = [
+                        admission['Negative'] || 0,
+                        exit['Negative'] || 0
                     ];
                     typeChart.update();
 
@@ -400,11 +562,12 @@
                 }
 
                 // Fetch recent interviews
-                const recentResponse = await fetch('/api/dashboard/recent');
+                const recentResponse = await fetch('/api/dashboard/recent?limit=100');
                 const recentData = await recentResponse.json();
 
                 if (recentData.success) {
-                    populateInterviewsTable(recentData.interviews);
+                    allInterviews = recentData.interviews;
+                    filterInterviews();
                 }
 
             } catch (error) {
@@ -412,22 +575,56 @@
             }
         }
 
-        // Populate interviews table
-        function populateInterviewsTable(interviews) {
-            const tbody = document.getElementById('interviews-tbody');
+        // ── Pagination & Search State ──
+        let allInterviews = [];
+        let filteredInterviews = [];
+        let currentPage = 1;
+        const PAGE_SIZE = 10;
 
-            if (!interviews || interviews.length === 0) {
+        // Filter interviews by search query
+        function filterInterviews() {
+            const query = (document.getElementById('interview-search').value || '').toLowerCase().trim();
+            
+            if (!query) {
+                filteredInterviews = [...allInterviews];
+            } else {
+                filteredInterviews = allInterviews.filter(iv => {
+                    const student = (iv.student_name || '').toLowerCase();
+                    const program = (iv.program || '').toLowerCase();
+                    const type = (iv.interview_type || '').toLowerCase();
+                    const sentiment = (iv.dominant_sentiment || '').toLowerCase();
+                    return student.includes(query) || program.includes(query) || type.includes(query) || sentiment.includes(query);
+                });
+            }
+
+            currentPage = 1;
+            renderPage();
+        }
+
+        // Render current page of interviews
+        function renderPage() {
+            const tbody = document.getElementById('interviews-tbody');
+            const totalPages = Math.max(1, Math.ceil(filteredInterviews.length / PAGE_SIZE));
+
+            if (!filteredInterviews || filteredInterviews.length === 0) {
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="7" style="text-align: center; color: var(--text-muted);">
-                            No interviews yet. <a href="/create-interview">Start one now!</a>
+                            No interviews found.
                         </td>
                     </tr>
                 `;
+                document.getElementById('page-indicator').textContent = 'No results';
+                document.getElementById('btn-prev').disabled = true;
+                document.getElementById('btn-next').disabled = true;
                 return;
             }
 
-            tbody.innerHTML = interviews.map(interview => {
+            const start = (currentPage - 1) * PAGE_SIZE;
+            const end = Math.min(start + PAGE_SIZE, filteredInterviews.length);
+            const pageData = filteredInterviews.slice(start, end);
+
+            tbody.innerHTML = pageData.map(interview => {
                 const date = new Date(interview.created_at).toLocaleDateString('en-US', {
                     month: 'short', day: 'numeric', year: 'numeric'
                 });
@@ -449,6 +646,18 @@
                     </tr>
                 `;
             }).join('');
+
+            // Update pagination controls
+            document.getElementById('page-indicator').textContent = `Page ${currentPage} of ${totalPages}`;
+            document.getElementById('btn-prev').disabled = currentPage <= 1;
+            document.getElementById('btn-next').disabled = currentPage >= totalPages;
+        }
+
+        // Change page
+        function changePage(direction) {
+            const totalPages = Math.ceil(filteredInterviews.length / PAGE_SIZE);
+            currentPage = Math.max(1, Math.min(currentPage + direction, totalPages));
+            renderPage();
         }
 
         // View interview details
@@ -456,10 +665,24 @@
             window.location.href = `/interview/${interviewId}`;
         }
 
-        // Export function
+        // Export modal functions
         function exportReport() {
-            alert('Report export functionality coming soon!');
+            document.getElementById('export-modal').style.display = 'flex';
         }
+
+        function closeExportModal() {
+            document.getElementById('export-modal').style.display = 'none';
+        }
+
+        function downloadReport(days) {
+            closeExportModal();
+            window.location.href = `/api/dashboard/export?days=${days}`;
+        }
+
+        // Close modal on backdrop click
+        document.getElementById('export-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeExportModal();
+        });
 
         // Store cached stats for filtering
         let cachedStats = null;
@@ -484,7 +707,6 @@
                     const sentDist = data.stats.sentiment_distribution || {};
                     sentimentChart.data.datasets[0].data = [
                         sentDist['Positive'] || 0,
-                        sentDist['Neutral'] || 0,
                         sentDist['Negative'] || 0
                     ];
                     sentimentChart.update();
@@ -516,13 +738,12 @@
             }
         }
 
-        // Update trend chart with data
+        // Update trend chart with data (raw counts, not percentages)
         function updateTrendChart(trendData, days) {
             if (!trendData || trendData.length === 0) {
                 trendChart.data.labels = ['No data'];
                 trendChart.data.datasets[0].data = [0];
                 trendChart.data.datasets[1].data = [0];
-                trendChart.data.datasets[2].data = [0];
                 trendChart.update();
                 return;
             }
@@ -531,7 +752,7 @@
             trendData.forEach(item => {
                 const date = item.date;
                 if (!dateMap[date]) {
-                    dateMap[date] = { Positive: 0, Neutral: 0, Negative: 0 };
+                    dateMap[date] = { Positive: 0, Negative: 0 };
                 }
                 if (item.dominant_sentiment) {
                     dateMap[date][item.dominant_sentiment] = (dateMap[date][item.dominant_sentiment] || 0) + item.count;
@@ -544,23 +765,13 @@
                 return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             });
 
-            const positiveData = sortedDates.map(d => {
-                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
-                return total ? Math.round((dateMap[d].Positive / total) * 100) : 0;
-            });
-            const neutralData = sortedDates.map(d => {
-                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
-                return total ? Math.round((dateMap[d].Neutral / total) * 100) : 0;
-            });
-            const negativeData = sortedDates.map(d => {
-                const total = dateMap[d].Positive + dateMap[d].Neutral + dateMap[d].Negative;
-                return total ? Math.round((dateMap[d].Negative / total) * 100) : 0;
-            });
+            // Use raw counts instead of percentages
+            const positiveData = sortedDates.map(d => dateMap[d].Positive);
+            const negativeData = sortedDates.map(d => dateMap[d].Negative);
 
             trendChart.data.labels = labels.length ? labels : ['No data'];
             trendChart.data.datasets[0].data = positiveData.length ? positiveData : [0];
-            trendChart.data.datasets[1].data = neutralData.length ? neutralData : [0];
-            trendChart.data.datasets[2].data = negativeData.length ? negativeData : [0];
+            trendChart.data.datasets[1].data = negativeData.length ? negativeData : [0];
             trendChart.update();
         }
 
@@ -569,8 +780,19 @@
             initCharts();
             loadDashboardData();
 
-            // Refresh data every 10 seconds for real-time updates
-            setInterval(loadDashboardData, 10000);
+            // Refresh data every 30 seconds (longer interval to avoid overriding user filters)
+            setInterval(loadDashboardData, 30000);
+
+            // Show "Interview Ended" modal if redirected from an ended interview
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('ended') === '1') {
+                document.getElementById('interview-ended-modal').style.display = 'flex';
+                window.history.replaceState({}, '', window.location.pathname);
+            }
         });
+
+        function closeEndedModal() {
+            document.getElementById('interview-ended-modal').style.display = 'none';
+        }
     </script>
 {% endblock %}

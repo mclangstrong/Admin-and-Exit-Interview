@@ -386,6 +386,43 @@ def get_all_interviews(limit: int = 50) -> List[Dict]:
     return [dict(row) for row in rows]
 
 
+def get_interviews_for_export(days: int = None) -> List[Dict]:
+    """Get interviews for report export with optional date filtering.
+    
+    Args:
+        days: Number of days to look back (7, 30, 90). None = all time.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if days:
+        cursor.execute('''
+            SELECT i.id, i.created_at, i.student_name, i.program, i.cohort,
+                   i.interview_type, i.status, i.duration_seconds,
+                   s.dominant_sentiment, s.dominant_emotion, s.avg_engagement_score,
+                   s.total_words
+            FROM interviews i
+            LEFT JOIN interview_summary s ON i.id = s.interview_id
+            WHERE i.created_at >= datetime('now', ? || ' days')
+            ORDER BY i.created_at DESC
+        ''', (f'-{days}',))
+    else:
+        cursor.execute('''
+            SELECT i.id, i.created_at, i.student_name, i.program, i.cohort,
+                   i.interview_type, i.status, i.duration_seconds,
+                   s.dominant_sentiment, s.dominant_emotion, s.avg_engagement_score,
+                   s.total_words
+            FROM interviews i
+            LEFT JOIN interview_summary s ON i.id = s.interview_id
+            ORDER BY i.created_at DESC
+        ''')
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+
 # ============================================================================
 # TRANSCRIPT OPERATIONS
 # ============================================================================
@@ -473,8 +510,11 @@ def save_audio_emotion(interview_id: int, emotion_result: Dict) -> bool:
     cursor.execute('''
         UPDATE analysis_results 
         SET audio_emotion = ?, audio_emotion_confidence = ?, interview_state = ?
-        WHERE interview_id = ? AND audio_emotion IS NULL
-        ORDER BY id DESC LIMIT 1
+        WHERE id = (
+            SELECT id FROM analysis_results
+            WHERE interview_id = ? AND audio_emotion IS NULL
+            ORDER BY id DESC LIMIT 1
+        )
     ''', (
         emotion_result.get('primary_emotion'),
         emotion_result.get('confidence'),
@@ -524,7 +564,7 @@ def calculate_interview_summary(interview_id: int) -> Dict:
         return {}
     
     # Calculate averages
-    sentiments = {'Positive': 0, 'Neutral': 0, 'Negative': 0}
+    sentiments = {'Positive': 0, 'Negative': 0}
     emotions_count = {}
     total_engagement = 0
     
@@ -541,12 +581,12 @@ def calculate_interview_summary(interview_id: int) -> Dict:
             total_engagement += a['engagement_score']
     
     # Determine dominant
-    dominant_sentiment = max(sentiments, key=sentiments.get) if any(sentiments.values()) else 'Neutral'
+    dominant_sentiment = max(sentiments, key=sentiments.get) if any(sentiments.values()) else 'Positive'
     dominant_emotion = max(emotions_count, key=emotions_count.get) if emotions_count else 'neutral'
     avg_engagement = total_engagement / len(analyses) if analyses else 0
     
-    # Get word count
-    cursor.execute('SELECT COUNT(*) as count FROM transcripts WHERE interview_id = ?', (interview_id,))
+    # Get actual word count by summing words in each transcript line
+    cursor.execute('SELECT COALESCE(SUM(LENGTH(text) - LENGTH(REPLACE(text, " ", "")) + 1), 0) as count FROM transcripts WHERE interview_id = ?', (interview_id,))
     word_count = cursor.fetchone()['count']
     
     # Get topics
@@ -659,13 +699,29 @@ def get_dashboard_stats(sentiment_filter: str = 'all', trend_days: int = 30) -> 
     cursor.execute('SELECT COUNT(DISTINCT student_name) as count FROM interviews WHERE student_name != ""')
     unique_students = cursor.fetchone()['count']
     
-    # Interview types
+    # Sentiment comparison by interview type (admission vs exit)
     cursor.execute('''
-        SELECT interview_type, COUNT(*) as count 
-        FROM interviews 
-        GROUP BY interview_type
+        SELECT 
+            i.interview_type,
+            s.dominant_sentiment,
+            COUNT(*) as count
+        FROM interviews i
+        JOIN interview_summary s ON i.id = s.interview_id
+        WHERE s.dominant_sentiment IS NOT NULL
+        GROUP BY i.interview_type, s.dominant_sentiment
     ''')
-    type_dist = {row['interview_type']: row['count'] for row in cursor.fetchall()}
+    type_sentiment_rows = cursor.fetchall()
+    
+    # Build structured comparison: { admission: {Positive: N, Negative: N}, exit: {Positive: N, Negative: N} }
+    type_sentiment = {
+        'admission': {'Positive': 0, 'Negative': 0},
+        'exit': {'Positive': 0, 'Negative': 0}
+    }
+    for row in type_sentiment_rows:
+        itype = row['interview_type'] or 'admission'
+        sentiment = row['dominant_sentiment'] or 'Positive'
+        if itype in type_sentiment and sentiment in type_sentiment[itype]:
+            type_sentiment[itype][sentiment] = row['count']
     
     # Emotion distribution (aggregate)
     cursor.execute('SELECT emotions_json FROM analysis_results WHERE emotions_json IS NOT NULL')
@@ -735,7 +791,7 @@ def get_dashboard_stats(sentiment_filter: str = 'all', trend_days: int = 30) -> 
         'avg_engagement': round(avg_engagement, 1),
         'unique_students': unique_students,
         'sentiment_distribution': sentiment_dist,
-        'type_distribution': type_dist,
+        'type_sentiment': type_sentiment,
         'emotion_distribution': emotion_dist,
         'topic_distribution': topic_dist,
         'trend_data': [dict(row) for row in trend_data]
